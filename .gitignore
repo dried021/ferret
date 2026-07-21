@@ -1,0 +1,14 @@
+# model weights / caches
+**/weights/
+hf_cache/
+
+# large intermediate outputs
+**/traces/
+**/factors/
+
+# python
+__pycache__/
+*.pyc
+
+# misc
+.DS_Store

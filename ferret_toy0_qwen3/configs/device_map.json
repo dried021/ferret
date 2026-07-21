@@ -1,0 +1,10 @@
+{
+  "note": "Physical GPU 2 and 3 on this shared 4x3090 host. Launch with CUDA_VISIBLE_DEVICES=2,3 so torch sees them as cuda:0 (physical 2) and cuda:1 (physical 3); device_map='balanced' then splits Qwen3-30B-A3B INT8 weights across just these two visible devices. GPU 0 was occupied by another user's process (~12GB) and GPU 1 was left free but unused, per instruction to run this experiment on GPU 2/3.",
+  "cuda_visible_devices": "2,3",
+  "strategy": "balanced",
+  "max_memory": {
+    "0": "22GiB",
+    "1": "22GiB",
+    "cpu": "64GiB"
+  }
+}

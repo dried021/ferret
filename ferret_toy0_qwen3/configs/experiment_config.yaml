@@ -1,0 +1,89 @@
+model:
+  name: Qwen/Qwen3-30B-A3B
+  dtype_backbone: int8            # Stage A/C: full-model routing/activation trace + validation backbone
+  dtype_expert_local: bfloat16    # Stage B: expert weight extraction/decomposition uses original BF16 weight
+  devices: [cuda:2, cuda:3]       # physical GPU 2,3 on this shared 4x3090 host (GPU 0 in use, GPU 1 idle but unused here)
+  cuda_visible_devices: "2,3"     # export before process start; inside the process these map to cuda:0/cuda:1
+  architecture_note: >
+    Qwen3MoE: 48 layers, 128 local experts, top-8 routing, hidden_size=2048,
+    moe_intermediate_size=768, SwiGLU-style gated experts. Installed transformers
+    (5.13.1) implements Qwen3MoeExperts with batched 3D weights (gate_up_proj,
+    down_proj) -- same shape as GraniteMoeExperts, so ferret_toy0/scripts/moe_hooks.py
+    can be adapted directly for later phases (module path: model.model.layers[i].mlp.experts,
+    only present when isinstance(layer.mlp, Qwen3MoeSparseMoeBlock)).
+
+hardware:
+  gpu_count: 2
+  gpu_model: RTX 3090
+  vram_per_gpu_gb: 24
+  peak_reserved_budget_gb: 22.5
+  ram_min_gb: 128
+  ram_recommended_gb: 192
+  disk_min_gb: 150
+  hf_home: /mnt/HDD/minjeong/hf_cache
+
+data:
+  source: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  seq_len: 256
+  n_calib_sequences: 16     # minimal run; bump to 32 for the full recommended run
+  n_eval_sequences: 16
+  n_crossdomain_sequences: 16
+  crossdomain_source: c4    # fallback: redpajama sample
+  batch_size: 1
+  use_cache: false
+  split_by_document: true   # never let a chunk straddle calibration/eval
+
+layer_selection:
+  # Section 7: minimal run = middle + late only; recommended run adds early
+  candidates:
+    early: [8, 12]
+    middle: [22, 26]
+    late: [38, 42]
+  minimal_positions: [middle, late]
+  recommended_positions: [early, middle, late]
+
+expert_selection:
+  n_experts_per_layer: 2       # minimal: high-frequency + medium-frequency
+  n_experts_per_layer_recommended: 3   # + effective-rank/routing-outlier expert
+  min_eval_token_count: 500
+  recommended_eval_token_count: 1000
+
+intervention: down_proj_only   # Toy0-A
+
+rank:
+  original_rank: 768
+  compression_threshold: 558          # r < 1,572,864 / 2816
+  block_rank: 32
+  r_compress: [64, 96, 128, 160, 192, 256, 320, 384, 448, 512, 544]
+  r_diagnostic: [576, 640, 704, 768]  # diagnostic only, never used for Go/No-Go
+  r_max_learned: 544
+
+thresholds_epsilon: [0.02, 0.05, 0.10]
+primary_epsilon: 0.05
+
+bootstrap:
+  n_resamples: 2000
+  level: sequence
+  seed: 0
+
+learned_nested_factorization:
+  lr: 1.0e-3
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  batch_tokens: [128, 512]
+  sandwich_sampling:
+    smallest_rank: 64
+    largest_rank: 544
+    n_random_middle: 2
+  lambda_weighting: inverse_sqrt_rank   # 1/sqrt(r), normalized to sum=1
+  progressive_stages:
+    - {ranks: [544], epochs: [1, 3]}
+    - {ranks: [256, 384, 448, 512, 544], epochs: [3, 5]}
+    - {ranks: full_grid, epochs: [5, 10]}
+  early_stopping_patience: 3
+
+phase0_smoke_test:
+  seq_lens: [64, 128, 256]
+  batch_size: 1

@@ -1,0 +1,12 @@
+{
+  "primary_epsilon": 0.05,
+  "gate1_pass_count": 0,
+  "gate1_total": 4,
+  "gate1_overall_pass": false,
+  "gate2_pass_count": 4,
+  "gate2_total": 4,
+  "gate2_overall_pass": true,
+  "gate3_pass_count": 4,
+  "gate3_total": 4,
+  "gate3_overall_pass": true
+}
