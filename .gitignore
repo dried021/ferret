@@ -5,6 +5,10 @@ hf_cache/
 # large intermediate outputs
 **/traces/
 **/factors/
+**/*.parquet
+
+# logs
+*.log
 
 # python
 __pycache__/
