@@ -23,6 +23,7 @@ PEAK_RESERVED_BUDGET_GB = 22.5
 ROOT = Path(__file__).resolve().parents[1]
 LOG_PATH = ROOT / "logs" / "smoke_test.log"
 RESULT_PATH = ROOT / "results" / "phase0_smoke_test.json"
+DEVICE_MAP_CONFIG = ROOT / "configs" / "device_map.json"
 
 
 def log(msg):
@@ -61,12 +62,16 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     log("loading model in INT8 across cuda:0,1 (balanced device_map)")
-    bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+    with open(DEVICE_MAP_CONFIG) as f:
+        dm_cfg = json.load(f)
+    max_memory = {(int(k) if k.isdigit() else k): v for k, v in dm_cfg["max_memory"].items()}
+    bnb_config = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True)
     t0 = time.time()
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         quantization_config=bnb_config,
-        device_map="balanced",
+        device_map=dm_cfg["strategy"],
+        max_memory=max_memory,
         torch_dtype=torch.bfloat16,
     )
     model.eval()

@@ -2,8 +2,8 @@ model:
   name: Qwen/Qwen3-30B-A3B
   dtype_backbone: int8            # Stage A/C: full-model routing/activation trace + validation backbone
   dtype_expert_local: bfloat16    # Stage B: expert weight extraction/decomposition uses original BF16 weight
-  devices: [cuda:2, cuda:3]       # physical GPU 2,3 on this shared 4x3090 host (GPU 0 in use, GPU 1 idle but unused here)
-  cuda_visible_devices: "2,3"     # export before process start; inside the process these map to cuda:0/cuda:1
+  devices: [cuda:0, cuda:1]       # physical GPU 0,1 on this shared 4x3090 host (GPU 3 busy with another user's job as of 2026-07-21)
+  cuda_visible_devices: "0,1"     # export before process start; inside the process these map to cuda:0/cuda:1
   architecture_note: >
     Qwen3MoE: 48 layers, 128 local experts, top-8 routing, hidden_size=2048,
     moe_intermediate_size=768, SwiGLU-style gated experts. Installed transformers

@@ -1,0 +1,5 @@
+tag,eps,n,fail_frac,dominant_rank,dominant_frac,occupied_bins,bins_ge_10pct,rank_entropy_bits,median_oracle_rank,mean_oracle_rank,q25_oracle_rank,q75_oracle_rank,gate2_pass
+layer22_expert18,oracle_rank_eps0.05,2489,0.0,768,1.0,1,1,-1.4428232973175175e-12,768.0,768.0,768.0,768.0,False
+layer22_expert30,oracle_rank_eps0.05,671,0.0,768,1.0,1,1,-1.4428232973175175e-12,768.0,768.0,768.0,768.0,False
+layer38_expert03,oracle_rank_eps0.05,2552,0.0,768,0.9996081504702194,2,1,0.0049999314070048595,768.0,767.9749216300941,768.0,768.0,False
+layer38_expert55,oracle_rank_eps0.05,3535,0.0,768,0.8231966053748232,4,2,0.7064370931396381,768.0,754.6387553041019,768.0,768.0,False

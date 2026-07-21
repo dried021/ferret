@@ -1,0 +1,30 @@
+{
+  "middle": {
+    "layer_id": 22,
+    "experts": [
+      {
+        "expert_id": 18,
+        "count": 2858
+      },
+      {
+        "expert_id": 30,
+        "count": 1973
+      }
+    ],
+    "meets_min_token_count": true
+  },
+  "late": {
+    "layer_id": 38,
+    "experts": [
+      {
+        "expert_id": 55,
+        "count": 3793
+      },
+      {
+        "expert_id": 3,
+        "count": 2413
+      }
+    ],
+    "meets_min_token_count": true
+  }
+}
