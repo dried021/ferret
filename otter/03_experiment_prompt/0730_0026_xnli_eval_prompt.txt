@@ -1,0 +1,267 @@
+이 문서는 OTTER 프로젝트(D²-MoE 다국어 calibration 연구) 중 "XNLI downstream
+평가" 서브태스크 하나만 다룬다. 논문 전체 맥락은 otter/02_prompt/의 최신
+프롬프트 파일(예: 0729_1710_prompt.txt)을 따로 참고할 것 -- 이 파일은 그
+문서를 대체하지 않고, XNLI 실험 구현·검증 작업만 이어서 할 수 있도록 별도로
+분리한 것이다. 이 파일 전체를 새 Claude 대화에 붙여넣고 "이어서 해줘"라고
+하면 된다.
+
+작성 기준 시각: 2026-07-30 00:26 KST (2026-07-29 15:26 UTC)
+작업 디렉토리: /home/minjeong/project/FERRET/otter/scripts/
+
+===============================================================================
+0. 한눈에 보는 현재 상태
+===============================================================================
+
+사용자가 준 원 요청: 첨부된 XNLI 다운스트림 평가 설계(아래 §1 요약)를 그대로
+구현하고, 로컬에서 smoke test까지 돌려볼 것.
+
+진행 상황:
+  [완료] otter/scripts/phase1_xnli_eval.py 구현
+  [완료] otter/scripts/phase1_xnli_analyze.py 구현
+  [완료] CPU(gpt2)로 로직 dry-run 검증
+  [완료] 코드 리뷰 1회 (버그 2건 발견·수정, 아래 §4)
+  [완료] 실제 DeepSeek-MoE-16B-base로 baseline --smoke 실행 성공
+         (theta5090 pod에서, 아래 §5) -- en=0.35, zh=0.35, sw=0.25 (n=20 each)
+  [미완료] 압축 조건(korean_only 등) --smoke 실행 -- 로컬 GPU 자원 상황 보고
+         보류 중이었음, 아래 §6 "다음 액션" 참고
+  [미완료] phase1_xnli_analyze.py를 실제 결과로 실행 (지금까지는 가짜 JSON
+         으로만 로직 검증함)
+  [미착수] 본실행(전체 XNLI test set, 5,010개/언어) -- smoke만 했음. 본실행
+         전에 theta5090의 disk-offload 이슈부터 점검 필요 (§5, §6)
+
+===============================================================================
+1. 실험 설계 요약 (사용자가 준 원 스펙, 이미 확정된 결론만)
+===============================================================================
+
+배경: 공식 XNLI(HF `xnli` dataset, facebook/xnli의 canonical alias)는 15개
+언어를 지원하는데, 이 프로젝트의 5개 calibration 언어(EN/KO/ZH/SW/BN) 중
+English/Chinese/Swahili만 겹친다. Korean/Bengali는 공식 XNLI에 없다.
+
+확정된 결정:
+  - **평가 언어는 en/zh/sw 3개만.** Korean/Bengali calibration checkpoint는
+    그대로 평가 대상에 포함하되(그 checkpoint가 en/zh/sw에 주는 transfer/
+    interference 효과를 보는 게 목적), 걔네를 위한 "자기 언어" 평가는 하지
+    않음. KorNLI/IndicXNLI 같은 대체 데이터셋은 쓰지 않기로 함(번역/annotation
+    파이프라인이 달라서 같은 표에 섞으면 안 됨).
+  - **Checkpoint 7개**: Original(비압축), English/Korean/Chinese/Swahili/
+    Bengali-calibrated(각각 phase1_calib_data.py의 english_only/korean_only/
+    chinese_only/swahili_only/bengali_only), Balanced(= mixed_5lang).
+  - **6-shot, 전부 English dev에서 고정 선택** (seed=42, label당 2개 =
+    entailment/neutral/contradiction 각 2개). 모든 checkpoint·모든 평가
+    언어에 동일한 데모 사용 (언어별로 새로 안 뽑음).
+  - **Instruction은 영어로 고정**, premise/hypothesis만 평가 언어.
+  - **Label mapping 1개만 고정**: A=Entailment, B=Neutral, C=Contradiction
+    (XNLI 데이터셋 자체의 ClassLabel 순서 0/1/2와 동일). 3-permutation
+    bias-control 체크는 스펙엔 있었지만 "시간 없으면 스킵 가능"한 sanity-
+    check 항목이라 이번 구현에는 넣지 않음(§4 참고).
+  - **" A"/" B"/" C" 세 continuation의 log-likelihood를 직접 비교**해서
+    argmax. 생성(generation) 방식 아님. DeepSeek 토크나이저에서 셋 다 정확히
+    1토큰인 것 확인됨(각각 id 338/380/339).
+  - **Split**: dev(validation)는 데모 선정에만, test(5,010개/언어)로만
+    accuracy 보고.
+  - **Metric**: accuracy, delta from baseline, macro avg(3개 언어 단순
+    평균), worst-language accuracy, retention %, own-language gain(자기
+    언어 calibration이 자기 언어 평가에서 다른 단일언어 calibration들
+    평균보다 얼마나 나은가 -- en/zh/sw에 대해서만 정의됨), balanced gap.
+
+(전체 원문 설계는 이 대화 세션 첫 메시지에 있던 15개 섹션짜리 한국어 스펙
+-- 위는 "실제 구현에 반영된 확정 사항"만 추림. 원문 전체가 다시 필요하면
+사용자에게 재요청할 것, 이 프롬프트 파일엔 안 옮겨 적음.)
+
+===============================================================================
+2. 구현한 파일
+===============================================================================
+
+**otter/scripts/phase1_xnli_eval.py**
+  - phase1_merge_eval.py의 load_model()/merge_condition()과
+    phase1_structured_prune.apply_structured_pruning()을 그대로 재사용
+    (belebele eval 스크립트와 동일 패턴) -- 압축 파이프라인 자체는 새로 안
+    만들고, XNLI eval pass만 추가.
+  - 핵심 함수: build_demonstrations()(고정 6-shot 선정), build_prompt(),
+    score_batch()(forward 1회로 " A"/" B"/" C" logprob 계산), eval_xnli().
+  - CLI는 phase1_belebele_eval.py와 거의 동일: --condition/--baseline/
+    --seed/--scale-condition/--scale-seed/--delta-ratio/--cpu-offload-gib/
+    --pp-ratio/--pp-condition/--batch-size/--demo-seed(기본 42)/--limit/
+    --smoke(limit=20).
+  - 출력 경로도 belebele eval과 동일 관례: RESULTS_ROOT/<condition>/
+    seed<N>/[scale_<c>_seed<N>/][delta_ratio_X/][pp_ratio_X/]
+    eval_xnli(_smoke).json. baseline은 RESULTS_ROOT/baseline/ 아래.
+  - 결과 JSON 구조: {"num_fewshot":6,"demo_seed":42,"limit":N,
+    "results":{"en":{"name":...,"acc":...,"n_samples":...}, "zh":{...},
+    "sw":{...}, "_demonstrations":[...6개...], "_demo_seed":42}}
+
+**otter/scripts/phase1_xnli_analyze.py**
+  - phase1_41_headline_gate.py와 같은 역할 분담: 여기서는 아무 것도 새로
+    계산 안 하고, 이미 쓰인 eval_xnli.json들을 모아서 macro avg/worst-
+    language/retention/delta/own-language gain/balanced gap만 집계·출력.
+  - 사용법: `python phase1_xnli_analyze.py --seed 0 [--smoke]
+    [--scale-diagonal]`. 7개 checkpoint(6 condition + baseline) 전부의
+    eval_xnli(_smoke).json이 있어야 실행됨 (없으면 뭐가 없는지 정확히
+    찍고 exit 1).
+
+===============================================================================
+3. 검증한 것 (실행 순서대로)
+===============================================================================
+
+1) gpt2 + 실제 DeepSeek 토크나이저로 로직만 CPU에서 dry-run
+   - build_demonstrations()가 라벨별 2개씩 결정론적으로 뽑는 것,
+   - build_prompt() 출력 포맷(6-shot 블록 + 마지막 "Answer:"로 끝나는 것),
+   - score_batch()의 배치 처리(우측 패딩 + 실토큰 마지막 위치 gather),
+   - eval_xnli() 전체 출력이 json.dumps로 정상 직렬화되는 것(_demonstrations
+     포함)까지 전부 확인함.
+
+2) phase1_xnli_analyze.py는 baseline+6조건짜리 가짜 eval_xnli_smoke.json을
+   /tmp 스크래치에 만들어서 실제로 돌려봄 -- 표 출력, own-language gain,
+   retention% 전부 정상 계산 확인. (진짜 결과로는 아직 안 돌려봄, §0 참고)
+
+3) 실제 DeepSeek-MoE-16B-base로 baseline --smoke 실행 (theta5090, 아래 §5)
+   -- 성공, en=0.35 zh=0.35 sw=0.25 (n=20 each), NaN 없음, 크래시 없음.
+
+===============================================================================
+4. 코드 리뷰에서 찾아 고친 버그 2건
+===============================================================================
+
+1) **디바이스 불일치 크래시 위험** (score_batch, phase1_xnli_eval.py):
+   forward 이전에 잡아둔 `next(model.parameters()).device`로 만든
+   batch_idx/last_idx 인덱스 텐서로 forward *이후*의 out.logits를
+   인덱싱하고 있었음. load_model()이 device_map="auto"로 모델을 2~4개
+   GPU에 나눠 올리는데, lm_head 출력이 첫 파라미터와 다른 GPU에 있으면
+   RuntimeError. gpt2 단일 디바이스 dry-run으론 못 잡았던 버그. ->
+   forward 후 out.logits.device에서 인덱스 텐서를 다시 만들도록 수정 완료.
+   (이 버그는 실제로는 아직 멀티 GPU 케이스에서 안 터졌음 -- theta5090은
+   GPU 1장이라 애초에 이 경로를 안 탐. 로컬 4x3090에서 압축 조건 돌릴 때
+   이 수정이 진짜 테스트됨. 주의해서 지켜볼 것.)
+
+2) **문서-코드 불일치**: 독스트링에 실제로는 구현 안 한
+   `xnli_label_permutation_check()` 함수와 `--label-permutations` 플래그를
+   언급하고 있었음(원 스펙의 3-permutation bias 체크, 스킵 가능 항목이라
+   실제로는 안 만듦). -> "구현 안 함"이라고 정확히 쓰도록 수정.
+
+부수적으로 phase1_xnli_analyze.py의 안 쓰는 `rows` dict(dead code)도 제거함.
+
+수정 후 재검증: 두 파일 모두 ast.parse 문법 체크 통과, phase1_xnli_eval.py는
+gpt2로 재-dry-run해서 로직 동일하게 동작 확인.
+
+**아직 실전에서 검증 안 된 부분**: truncation/max_length 가드가 없음(기존
+data_utils.py 관례와 동일하게 없음). smoke(20개, 6-shot)에서는 전혀 문제
+안 됐지만, XNLI 원문 중 긴 문장이 있는 본실행 스케일(5,010개/언어)에서
+극단적으로 긴 프롬프트가 모델 context(4096) 넘길 가능성은 이론상 남아있음.
+지금까지는 문제 안 됐다는 근거만 있고 막아놓지는 않은 상태.
+
+===============================================================================
+5. theta5090 (baseline smoke test를 돌린 곳) 상세
+===============================================================================
+
+사용자가 "baseline 모델만 있으면 되니 로컬 자산 필요 없이 theta에서 바로
+돌릴 수 있다"고 알려줘서 발견한 pod. RUN_STATE.md의 Pod1/Pod2(RunPod
+A100)와는 별개의, 이번 세션에서 처음 쓴 호스트.
+
+  - SSH: `ssh theta5090` (~/.ssh/config에 이미 등록됨 -- Host theta5090,
+    HostName 35.199.51.171, Port 30035, User root,
+    IdentityFile ~/.ssh/runpod_5090_ed25519)
+  - GPU: RTX 5090 1장, 32607MiB. 확인 시점 기준 완전 유휴.
+  - conda 없음(base 환경 하나뿐, d2moe_env 같은 별도 env 없음) -- 그냥
+    `/opt/conda/bin/python3` 직접 사용. torch 2.7.0+cu128(cuda available),
+    transformers 4.42.4, datasets 3.2.0 이미 설치돼 있음(로컬과 버전 다름,
+    주의).
+  - **HF_HOME=/mnt/HDD/minjeong/hf_cache 를 반드시 명시**해야 함 (기본
+    ~/.cache/huggingface 에는 deepseek 모델이 없고 belebele 데이터셋만
+    있음). deepseek-moe-16b-base(31GB)는 이미
+    /mnt/HDD/minjeong/hf_cache/hub/models--deepseek-ai--deepseek-moe-16b-base
+    에 캐시돼 있음.
+  - **/root/otter/** 에 scripts/D2MoE/data가 이미 동기화돼 있었음(오늘
+    낮에 다른 세션이 belebele grid 작업을 여기서 돌린 흔적:
+    /mnt/HDD/minjeong/d2moe_results/phase1/baseline/eval_belebele.json 등).
+    phase1_xnli_eval.py / phase1_xnli_analyze.py는 이번에 scp로 새로
+    복사해 넣음 -- **로컬에서 두 파일을 또 고치면 theta5090에도 다시
+    scp해야 반영됨** (자동 동기화 없음).
+  - **★★★ 함정 주의 ★★★**: theta5090의 `/mnt/HDD/...`는 로컬 머신의
+    `/mnt/HDD/...`와 절대 경로만 같을 뿐 완전히 별개의 디스크다(로컬은
+    실제 마운트된 물리 디스크, theta5090은 그냥 root overlay fs 위의
+    디렉토리 -- `df -h /mnt/HDD`로 확인하면 theta5090은 `/`와 같은
+    filesystem으로 나옴). RESULTS_ROOT가 두 머신 모두
+    "/mnt/HDD/minjeong/d2moe_results/phase1"로 하드코딩돼 있어서 헷갈리기
+    쉬움 -- **theta5090에서 만든 eval_xnli_smoke.json은 로컬에 없고, 로컬
+    RESULTS_ROOT에는 없음.** 실제로 지금 baseline/eval_xnli_smoke.json은
+    theta5090에만 있고 로컬에는 없다(직접 확인함). 나중에 로컬
+    phase1_xnli_analyze.py를 돌리려면 theta5090에서 만든 결과 파일들을
+    로컬 RESULTS_ROOT로 scp해 와야 함.
+  - **실행 시 나온 경고**: `WARNING:root:Some parameters are on the meta
+    device because they were offloaded to the disk.` -- load_model()의
+    max_memory가 GPU당 22GiB로 캡돼 있는데 GPU가 1장(32GB)뿐이라 모델
+    일부가 디스크로 오프로드된 것으로 보임(정확도 자체는 정상 나왔지만
+    smoke 20개라 오프로드 오버헤드가 안 느껴졌을 뿐일 수 있음). **본실행
+    (5,010개 x 3언어)을 theta5090에서 돌리기 전에 이 부분부터 점검할 것**
+    -- `--cpu-offload-gib` 옵션으로 CPU RAM(62GB 중 59GB 여유)을 명시적
+    으로 열어주거나, load_model()의 max_memory 로직 자체를 GPU 1장
+    환경에 맞게 조정하는 걸 고려. 안 그러면 disk offload 때문에 본실행이
+    비정상적으로 느려질 수 있음.
+  - 실행 커맨드 예시(실제 썼던 것):
+    ```
+    ssh theta5090
+    cd /root/otter/scripts
+    HF_HOME=/mnt/HDD/minjeong/hf_cache /opt/conda/bin/python3 -u \
+      phase1_xnli_eval.py --baseline --smoke > /root/xnli_baseline_smoke.log 2>&1 &
+    ```
+
+===============================================================================
+6. 로컬 GPU 상황 & 다음 액션
+===============================================================================
+
+**압축 조건(korean_only 등) smoke test는 로컬 자산(fisher/svd_scale 결과)이
+필요해서 로컬 4x3090에서 돌려야 함.** 이 세션 안에서 있었던 경합 상황:
+
+  - 세션 시작 시점엔 GPU 4장 전부 다른 두 작업(phase1_belebele_eval
+    korean_only, phase1_merge_eval korean_only, PID 1358815/1362493)이
+    점유 중이라 사용자에게 물어봤고, "끝날 때까지 대기"를 골라서 백그라운드
+    Monitor로 그 두 PID를 감시해뒀음.
+  - **그 두 작업은 이후 실제로 끝났음** (Monitor 알림으로 확인, 2026-07-29
+    15:2x UTC경). 그런데 **그 직후 다른(이 세션 소관 아닌) 자동화 백필
+    스크립트가 GPU2,3에서 새로 작업을 시작함** -- korean_only/chinese_only/
+    swahili_only seed 0~1~2 + english_only seed0 scale의 merge_eval을
+    순차로 도는 큐(로그: otter/scripts/logs/phase1_6_p2_backfill.log,
+    CUDA_VISIBLE_DEVICES=2,3, flock /tmp/phase1_merge_eval.lock 사용).
+    이 세션이 띄운 게 아니므로 함부로 안 건드림.
+  - 마지막 확인 시점(2026-07-29 15:26 UTC) 기준: **GPU0,1은 비어 있었고
+    (각 1MiB 사용), GPU2,3은 그 백필 작업이 점유 중**이었음. 이 스냅샷은
+    금방 바뀔 수 있으니 재개할 때 반드시 `nvidia-smi`로 다시 확인할 것.
+  - 이 세션이 걸어둔 백그라운드 Monitor(local GPU 감시)는 세션이 끊기면
+    같이 사라짐 -- 새 세션에서 이어받으면 그 Monitor는 없다고 가정하고,
+    필요하면 새로 걸 것.
+
+**다음 세션 시작하면 할 일 (우선순위 순)**:
+  1. `nvidia-smi` / `ps aux | grep phase1`로 현재 로컬 GPU 상황 재확인.
+  2. GPU0,1(혹은 비어있는 아무 GPU)이 비어 있으면
+     `conda run -n d2moe_env python phase1_xnli_eval.py --condition
+     korean_only --seed 0 --smoke` 같은 압축 조건 smoke test 1개 실행
+     (§4의 디바이스 수정이 진짜 멀티 GPU에서 문제없이 동작하는지 이번에
+     처음 실전 검증됨 -- 결과뿐 아니라 크래시 여부도 확인할 것).
+  3. baseline/korean_only 둘 다 smoke가 성공하면, theta5090에서 만든
+     baseline/eval_xnli_smoke.json을 로컬 RESULTS_ROOT로 scp해 오거나,
+     혹은 로컬에서 baseline도 한 번 더 돌려서 로컬 트리를 채운 뒤
+     `phase1_xnli_analyze.py --smoke`를 실제 데이터로 돌려서 표가 정상
+     나오는지 최종 확인.
+  4. 위가 다 되면 본실행 스케일 결정(§1의 Phase 1/2 축소판: 7 checkpoint x
+     3언어 x 5,010개, 언어당 몇 분 걸리는지 smoke 소요시간으로 추정 후
+     `--limit 500` 파일럿부터 갈지 바로 full 갈지 사용자와 확인) -- 이때
+     theta5090을 쓸 거면 §5의 disk-offload 이슈부터 반드시 해결.
+
+===============================================================================
+7. 참고: 파일 위치 요약
+===============================================================================
+
+  - 스크립트(로컬): otter/scripts/phase1_xnli_eval.py,
+    otter/scripts/phase1_xnli_analyze.py
+  - 스크립트(theta5090 사본): /root/otter/scripts/phase1_xnli_eval.py,
+    /root/otter/scripts/phase1_xnli_analyze.py (수동 scp로만 갱신됨)
+  - 로컬 RESULTS_ROOT: /mnt/HDD/minjeong/d2moe_results/phase1/
+  - theta5090 RESULTS_ROOT(별개 디스크, §5 참고):
+    /mnt/HDD/minjeong/d2moe_results/phase1/
+  - theta5090에 있는 baseline XNLI smoke 결과:
+    /mnt/HDD/minjeong/d2moe_results/phase1/baseline/eval_xnli_smoke.json
+  - 재사용한 기존 코드: otter/scripts/phase1_merge_eval.py
+    (load_model/merge_condition/RESULTS_ROOT), otter/scripts/
+    phase1_structured_prune.py, otter/scripts/phase1_calib_data.py
+    (CONDITIONS 목록), otter/scripts/phase1_belebele_eval.py(구조 참고용
+    템플릿), otter/scripts/phase1_41_headline_gate.py(analyze 스크립트
+    관례 참고용 템플릿)

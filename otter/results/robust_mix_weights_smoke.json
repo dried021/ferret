@@ -1,0 +1,96 @@
+{
+  "seed": 0,
+  "k_primary": 64,
+  "n_restarts": 12,
+  "smoke": true,
+  "langs_order": [
+    "eng_Latn",
+    "kor_Hang",
+    "zho_Hans",
+    "swh_Latn",
+    "ben_Beng"
+  ],
+  "global": {
+    "w_star": {
+      "eng_Latn": 0.3925040993639374,
+      "kor_Hang": 0.09672513155339803,
+      "zho_Hans": 0.20379500788143648,
+      "swh_Latn": 0.1275601871532225,
+      "ben_Beng": 0.17941557404800573
+    },
+    "max_relfrob_wstar": 1.3206715571685093,
+    "max_relfrob_balanced": 1.4602664627267126,
+    "per_lang_relfrob_wstar": {
+      "eng_Latn": 1.3206715571685077,
+      "kor_Hang": 1.3206715571685081,
+      "zho_Hans": 1.3206715571685084,
+      "swh_Latn": 1.3206715571685093,
+      "ben_Beng": 1.3206715571685068
+    },
+    "per_lang_relfrob_balanced": {
+      "eng_Latn": 1.4602664627267126,
+      "kor_Hang": 1.1822589020306697,
+      "zho_Hans": 1.3952065157343132,
+      "swh_Latn": 1.2380207512582473,
+      "ben_Beng": 1.2464651131348032
+    },
+    "improvement_over_balanced_pct": 9.559550200005408,
+    "n_cells": 16
+  },
+  "per_layer": {
+    "1": {
+      "w_star": {
+        "eng_Latn": 0.3768732391148372,
+        "kor_Hang": 0.11501872650740336,
+        "zho_Hans": 0.2237890907478456,
+        "swh_Latn": 0.11477346825017594,
+        "ben_Beng": 0.16954547537973802
+      },
+      "max_relfrob_wstar": 1.3365353414103018,
+      "max_relfrob_balanced": 1.4774377150478972,
+      "per_lang_relfrob_wstar": {
+        "eng_Latn": 1.336535341410296,
+        "kor_Hang": 1.3365353414102914,
+        "zho_Hans": 1.3365353414102847,
+        "swh_Latn": 1.336535341410293,
+        "ben_Beng": 1.3365353414103018
+      },
+      "per_lang_relfrob_balanced": {
+        "eng_Latn": 1.4774377150478972,
+        "kor_Hang": 1.207519150551634,
+        "zho_Hans": 1.4286440448055093,
+        "swh_Latn": 1.2749216331277295,
+        "ben_Beng": 1.2422786276802256
+      },
+      "n_cells": 8
+    },
+    "2": {
+      "w_star": {
+        "eng_Latn": 0.4132277367401261,
+        "kor_Hang": 0.07420523678929171,
+        "zho_Hans": 0.1911894819416882,
+        "swh_Latn": 0.13289858490538772,
+        "ben_Beng": 0.18847895962350636
+      },
+      "max_relfrob_wstar": 1.3051245812014616,
+      "max_relfrob_balanced": 1.4430952104055288,
+      "per_lang_relfrob_wstar": {
+        "eng_Latn": 1.3051245812014616,
+        "kor_Hang": 1.3051245812014596,
+        "zho_Hans": 1.3051245812014605,
+        "swh_Latn": 1.3051245812014598,
+        "ben_Beng": 1.305124581201459
+      },
+      "per_lang_relfrob_balanced": {
+        "eng_Latn": 1.4430952104055288,
+        "kor_Hang": 1.1569986535097059,
+        "zho_Hans": 1.361768986663117,
+        "swh_Latn": 1.2011198693887648,
+        "ben_Beng": 1.2506515985893807
+      },
+      "n_cells": 8
+    }
+  },
+  "gate_passed": true,
+  "gate_note": "w* improves max relFrob over balanced -- proceed to STEP 2/3"
+}

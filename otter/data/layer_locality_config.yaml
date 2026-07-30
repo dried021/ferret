@@ -1,0 +1,35 @@
+# 0) Layer-38 국소성 검증 (00_docs/02_Toy_실험.md) -- Phase 0.5의 핵심 발견은
+# "layer 38의 Fisher within-EN vs EN-KO/ZH 상관이 갈라진다"였는데, 그때 측정한
+# 가장 깊은 레이어가 38이었다. Qwen3-30B-A3B는 실제로 48개 레이어(0~47)이므로
+# 38 이후로 9개 레이어가 안 보이는 채로 남아 있었다. 이 config는 같은 probe를
+# 압축 없이, 같은 seed/token budget/조건으로 다시 돌리되 레이어만 후반부
+# (34/42/45/47)를 추가해서 "정말 최종 레이어 1~2개 국소 현상인지, 후반 블록
+# 전체에 퍼진 현상인지"를 가른다. 새 언어/새 분석/새 모델 없음.
+#
+# seeds/total_token_budget이 phase0_5_config.yaml과 동일하므로, token_budget_chunks가
+# 결정적(seed 고정)이라 겹치는 레이어(4/8/14/22/30/38)는 phase0_5의 결과와 정확히
+# 일치해야 한다 -- 재현성 재확인도 겸한다.
+
+source: israel/flores-parallel
+split: test
+column_prefix: "sentence_"
+
+languages:
+  eng_Latn: English
+  kor_Hang: Korean
+  zho_Hans: Chinese (Simplified)
+
+seeds: [0, 1, 2]
+# 4/8/14/22/30/38: phase0_5과 동일 (재현성 재확인용). 34/42/45/47: 신규 -- 후반
+# 블록 밀도를 높여 38의 갈라짐이 국소적인지 확인.
+layer_indices: [4, 8, 14, 22, 30, 34, 38, 42, 45, 47]
+
+total_token_budget: 5000
+
+conditions: [english_a, english_b, korean, chinese, balanced]
+
+# 이 실험은 phase0_5의 5개 사전 등록 기준 게이트를 재사용하지 않는다 (그 기준은
+# "본실험 진행 여부"를 위한 것이지 "국소성" 질문에 맞지 않음) -- 대신
+# 02c_analyze_layer_locality.py가 layer별 fisher gap 크기를 직접 비교한다.
+gate:
+  fisher_gap_threshold: 0.3   # within_en_rho - mean(en_ko_rho, en_zh_rho) 기준

@@ -1,0 +1,57 @@
+{
+  "seeds": [
+    0
+  ],
+  "layers": [
+    4,
+    8,
+    14,
+    22,
+    30,
+    38
+  ],
+  "gate_config": {
+    "ratio_ok_threshold": 1.3,
+    "layer38_pass_min_seeds": 2,
+    "bootstrap_ci_layer": 38,
+    "bootstrap_n_resamples": 2000
+  },
+  "median_ratio_by_layer": {
+    "4": 2.98233970963517,
+    "8": 1.7663699730929676,
+    "14": 2.0629620860266025,
+    "22": 2.2215807615272074,
+    "30": 1.3492964925775133,
+    "38": 2.3563083139165686
+  },
+  "layer38_pass_count": 1,
+  "seeds_with_layer38_gt_layer8": 1,
+  "seeds_with_fisher_gap_at_layer38": 1,
+  "bootstrap_layer38_ratio": {
+    "lo": 2.3563083139165686,
+    "hi": 2.3563083139165686,
+    "mean": 2.3563083139165686,
+    "n_resamples": 2000
+  },
+  "criteria": {
+    "1_median_ratio_mid_and_late_layer": true,
+    "2_layer38_pass_min_seeds": false,
+    "3_layer38_ratio_gt_layer8_majority_seeds": true,
+    "4_fisher_within_en_gt_cross_lang_majority_seeds": true,
+    "5_bootstrap_ci_layer38_excludes_1.0": true
+  },
+  "n_criteria_met": 4,
+  "verdict": "PROGRESS_PASS",
+  "verdict_message": "PROGRESS_PASS -- >=3/5 pre-registered criteria met. Proceed to README.md Phase 0 (official D^2-MoE repo) and Phase 1 pilot.",
+  "per_seed_layer_depth_trend": {
+    "0": {
+      "spearman_rho": -0.2,
+      "spearman_p": 0.704,
+      "slope": -0.014453637643490107
+    }
+  },
+  "pooled_layer_depth_spearman": {
+    "rho": -0.2,
+    "p": 0.704
+  }
+}

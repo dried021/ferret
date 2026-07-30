@@ -1,0 +1,12 @@
+{
+  "note": "4x3090 host, shared with other users. Which GPUs are safe changes run to run (2026-07-23: GPU0 held by 'dongjin', GPU3 held by 'hayeong', both at active compute -- neither is ours to touch even though _probe_max_memory would find a few GiB 'free' on GPU0). cuda_visible_devices is NOT read from this file -- 00_config.py's _safe_gpu_indices() checks nvidia-smi + ps ownership at the start of every run and hard-excludes any GPU with a process owned by someone other than the current user. max_memory below applies only to whatever subset survives that check.",
+  "strategy": "balanced",
+  "dtype": "bfloat16",
+  "max_memory": {
+    "0": "22GiB",
+    "1": "22GiB",
+    "2": "22GiB",
+    "3": "22GiB",
+    "cpu": "64GiB"
+  }
+}

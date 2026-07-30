@@ -1,0 +1,18 @@
+[gpu01-queue 16:21:38] ==========================================
+[gpu01-queue 16:21:38] STEP 1: Belebele korean_only grid (seed 0/1/2, off/on pruning, 5-shot n=200)
+[gpu01-queue 16:21:38] ==========================================
+Traceback (most recent call last):
+  File "/home/minjeong/project/FERRET/otter/scripts/run_phase1_belebele_grid.py", line 152, in <module>
+    print(f"[belebele-grid] ON {cond}/seed{seed} pp_ratio={args.pp_ratio} already done, skipping")
+  File "/home/minjeong/project/FERRET/otter/scripts/run_phase1_belebele_grid.py", line 139, in main
+    try:
+  File "/home/minjeong/project/FERRET/otter/scripts/run_phase1_belebele_grid.py", line 68, in run
+    subprocess.run(cmd, cwd=SCRIPT_DIR, env=env, check=True)
+  File "/home/minjeong/anaconda3/envs/d2moe_env/lib/python3.10/subprocess.py", line 526, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['flock', '/tmp/phase1_merge_eval.lock', 'conda', 'run', '-n', 'd2moe_env', 'python', '-u', 'phase1_belebele_eval.py', '--condition', 'korean_only', '--seed', '0', '--batch-size', '1', '--limit', '200', '--num-fewshot', '5', '--scale-condition', 'korean_only', '--scale-seed', '0']' died with <Signals.SIGKILL: 9>.
+
+ERROR conda.cli.main_run:execute(127): `conda run python -u run_phase1_belebele_grid.py --conditions korean_only --seeds 0 1 2 --pp-ratio 0.2 --num-fewshot 5 --limit 200 --batch-size 1` failed. (See above for error)
+[belebele-grid] === OFF (Fisher+SVD, no pruning) korean_only/seed0 ===
+[belebele-grid] + phase1_belebele_eval.py --condition korean_only --seed 0 --batch-size 1 --limit 200 --num-fewshot 5 --scale-condition korean_only --scale-seed 0 (GPUS=0,1)
+

@@ -1,0 +1,37 @@
+{
+  "eng_Latn": {
+    "lang_name": "English",
+    "n_sentences": 60,
+    "n_tokens": 1834,
+    "n_bytes": 8666,
+    "tokens_per_byte": 0.21163166397415187
+  },
+  "kor_Hang": {
+    "lang_name": "Korean",
+    "n_sentences": 60,
+    "n_tokens": 7174,
+    "n_bytes": 10222,
+    "tokens_per_byte": 0.7018196047740168
+  },
+  "zho_Hans": {
+    "lang_name": "Chinese",
+    "n_sentences": 60,
+    "n_tokens": 1944,
+    "n_bytes": 8157,
+    "tokens_per_byte": 0.23832291283560134
+  },
+  "swh_Latn": {
+    "lang_name": "Swahili",
+    "n_sentences": 60,
+    "n_tokens": 3577,
+    "n_bytes": 9104,
+    "tokens_per_byte": 0.3929042179261863
+  },
+  "ben_Beng": {
+    "lang_name": "Bengali",
+    "n_sentences": 60,
+    "n_tokens": 15979,
+    "n_bytes": 23314,
+    "tokens_per_byte": 0.6853821738011495
+  }
+}

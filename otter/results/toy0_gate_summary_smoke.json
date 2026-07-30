@@ -1,0 +1,28 @@
+{
+  "gate_margin": 1.5,
+  "top_k_fraction": 0.25,
+  "per_layer": {
+    "8": {
+      "noise_floor_js": 0.40489100338427486,
+      "cross_language_mean_js": 0.36574387262951613,
+      "ratio": 0.9033143971400992,
+      "pass": false
+    },
+    "22": {
+      "noise_floor_js": 0.36340252207661855,
+      "cross_language_mean_js": 0.3738986392568129,
+      "ratio": 1.0288828958043978,
+      "pass": false
+    },
+    "38": {
+      "noise_floor_js": 0.32647088587320294,
+      "cross_language_mean_js": 0.41200657131494944,
+      "ratio": 1.2620009597883943,
+      "pass": false
+    }
+  },
+  "n_layers_pass": 0,
+  "n_layers_total": 3,
+  "overall_pass": false,
+  "verdict": "FAIL -- cross-language divergence is not clearly larger than the same-language noise floor on this model/layer subset/sample size. Do not proceed to Phase 0/1 yet -- first check whether this is a sample-size issue (raise N_SENTENCES) or a genuine null result on Qwen3-30B-A3B, per README.md risks."
+}

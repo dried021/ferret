@@ -1,0 +1,111 @@
+이 문서는 OTTER 프로젝트 중 "§6 negative result(disagreement-targeted 실패)를
+Track A(취약성 배분)/Track B(간섭 모델)로 재시도하는 작업"만 다룬다. 논문
+전체 맥락은 otter/02_prompt/의 최신 프롬프트(예: 0729_1710_prompt.txt)를 참고.
+이 파일 전체를 새 Claude 대화에 붙여넣고 "이어서 해줘"라고 하면 된다.
+
+작성 기준 시각: 2026-07-30 00:57 KST
+작업 디렉토리: /home/minjeong/project/FERRET/otter/scripts/
+근거 문서: 01_plans/06_불일치표적배분_실측결과.md(원래 실패 원인 분석),
+          01_plans/06_불일치표적배분_해결계획_0729.md(Track A/B/C 전체 설계)
+
+===============================================================================
+0. 지금 뭐가 돌고 있나 (가장 먼저 확인할 것)
+===============================================================================
+
+conda run -n d2moe_env python phase1_merge_eval.py 를 GPU2,3에서 순차 실행
+중 (백그라운드 셸, 이 세션 재시작 시 프로세스 존재 여부 nvidia-smi/ps로
+직접 확인할 것 — 세션이 끊기면 백그라운드 잡도 같이 죽었을 수 있음):
+
+  tail -30 /home/minjeong/project/FERRET/otter/scripts/logs/phase1_6_p2_backfill.log
+  nvidia-smi
+
+00:57 KST 기준 진행 상황: english_only(3/3), korean_only(2/3, seed2 진행중)
+완료, chinese_only(0/3), swahili_only(0/3) 남음 — 총 12개 중 5~6개 완료.
+회당 15~20분 페이스.
+
+돌고 있는 커맨드 패턴(끊겼으면 이걸로 이어서 재개):
+  cd /home/minjeong/project/FERRET/otter/scripts
+  flock /tmp/phase1_merge_eval.lock env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    CUDA_VISIBLE_DEVICES=2,3 conda run -n d2moe_env python -u phase1_merge_eval.py \
+    --condition <condition> --seed <seed>
+  (이미 끝난 조건/seed는 eval_ppl.json에 ben_Beng 키 있는지로 스킵 판단)
+
+===============================================================================
+1. 이 작업이 왜 필요한가 (한 줄 요약)
+===============================================================================
+
+§6 원안(disagreement_targeted/cap50)은 NOT_SUPPORTED로 실패. 원인: "라우팅
+불일치" 신호가 "압축 취약성"의 프록시가 아니었음(Bengali가 가장 취약한데
+deficiency=5/810로 "문제없음" 판정됨). 해결책 문서(06_불일치표적배분_
+해결계획_0729.md)가 제안한 재시도 3트랙을 이미 구현해 놨고, Track B를 돌리려면
+english/korean/chinese/swahili_only 4개 조건에 벵골어(ben_Beng) 평가가 빠져
+있던 걸 채워야 해서(P2 백필) 그 작업을 지금 하는 중.
+
+===============================================================================
+2. 이미 구현 완료된 것 (코드 존재, 실행 검증 일부만 됨)
+===============================================================================
+
+- otter/scripts/phase1_calib_data.py: 새 조건 5개 등록
+  (vulnerability_targeted, _abs, _random, interference_minimax, _random)
+- otter/scripts/phase1_6_vulnerability_budget.py (Track A): 실행 성공 확인됨
+  (seed0, --signal gap 기본값). seed1/2 및 --signal abs, --random-control
+  변형은 아직 안 돌림 — CPU만 쓰고 몇 초면 끝남, GPU 불필요.
+- otter/scripts/phase1_6_interference_model.py (Track B): 아직 실행 실패
+  (KeyError: ben_Beng — 지금 이 P2 백필이 그 사전조건을 채우는 작업).
+  P2 백필 12개 다 끝나면 바로 재시도:
+    conda run -n d2moe_env python phase1_6_interference_model.py --seed 0
+- otter/scripts/phase1_6_budget_gate_v2.py: Track A/B/C + control 전부
+  사전등록된 게이트. 아직 실행 안 함(대상 조건들이 아직 GPU 안 돌았음).
+
+===============================================================================
+3. 다음 순서 (P2 백필 끝난 직후부터)
+===============================================================================
+
+1. P2 백필 12개 완료 확인 (§0 로그)
+2. Track B 실행: phase1_6_interference_model.py --seed 0
+   → a_lk 행렬, LOO 적합도, minimax 배분 s* 출력 확인. a_{·,swh_Latn} 열이
+     대체로 양수인지(=Swahili calibration이 다른 언어를 해친다는 가설)가
+     핵심 체크포인트.
+3. Track A 나머지: phase1_6_vulnerability_budget.py --seed {1,2}, --signal abs,
+   --random-control 변형들도 seed 0/1/2 돌려서 budget_allocation.json 채우기
+4. Track A/B가 고른 조건(vulnerability_targeted, interference_minimax 등)을
+   실제 GPU 파이프라인으로 1회씩 실행:
+     phase1_run_freq_and_scale.py --condition <c> --seed <s>
+     phase1_fisher.py --condition <c> --seed <s>
+     phase1_merge_eval.py --condition <c> --seed <s>
+   (조건당 3 seed, GPU 2장 필요 — merge_eval은 반드시 2장 페어링, 1장이면
+   NaN 위험 있음)
+5. phase1_6_budget_gate_v2.py 실행 → Track A/B/C 중 하나라도 Balanced를
+   3 seed 다 이기면 SUPPORTED, 아니면 Track B의 LOO 예측력으로 "간섭 구조
+   발견" 프레이밍 폴백
+
+===============================================================================
+4. 이번 세션에서 겪은 함정 (똑같이 겪지 않도록)
+===============================================================================
+
+- **flash_attn 캐시 오염**: ~/.cache/huggingface/hub/.../modeling_deepseek.py
+  blob이 조용히 패치 안 된 원본으로 되돌아가 있을 수 있음(원인 불명, 오늘
+  실제로 발생). `if is_flash_attn_2_available():` 블록이 있으면(→ try/except
+  ImportError로) 패치 안 돼 있는 것 — ImportError: flash_attn not found 로
+  실패하면 이걸 의심할 것.
+- **merge_eval은 GPU 1장으로 절대 돌리지 말 것** — 31GB 모델이 24GB 1장에
+  안 들어가 CPU/disk offload가 걸리고, 이 경로가 에러 없이 NaN을 만든 전례
+  있음(local_gpu_driver.sh 주석 참고).
+- **PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 필수** — 없으면 5번째
+  언어(Bengali) eval에서 아주 근소한 차이(1.6GB 필요, 1.5GB 여유)로 OOM남.
+- **GPU3은 공유 helper GPU** — local_gpu_driver.sh(다른 조건 백필용 드라이버)
+  가 GPU0/1에서 돌 때 merge_eval 단계에서 GPU3을 빌려씀. `flock
+  /tmp/phase1_merge_eval.lock`을 반드시 같이 걸어서 직렬화할 것 — 안 그러면
+  실제로 다른 작업의 merge_eval을 OOM으로 13번 실패시킨 전례 있음(오늘).
+  GPU 작업 시작 전에 항상 `nvidia-smi` + `ps -eo pid,cmd | grep local_gpu_driver`
+  로 다른 세션이 뭘 쓰고 있는지 먼저 확인할 것.
+- 백그라운드 bash job은 cwd가 안 이어질 수 있음 — 로그 경로는 항상 절대경로로.
+
+===============================================================================
+5. 참고: 이번 세션이 만들지 "않은" 것
+===============================================================================
+
+- Track A/B의 실제 GPU 실행(§3-4단계) — 아직 CPU 계산(신호/배분)만 함.
+- Track C(whitening-only) 실행 — 코드 불필요(기존 --scale-condition 재사용),
+  아직 실행도 안 함.
+- R1(random control) 실제 GPU 실행, R3(Bengali 구조적 취약성 SVD 분석) — 미착수.

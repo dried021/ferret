@@ -1,0 +1,574 @@
+이 문서는 OTTER 프로젝트(D²-MoE 다국어 calibration 연구)의 논문(EACL 제출 목표) 작성을
+돕기 위해, 지금까지의 연구 설계·실행 경과·모든 실험 결과·논문 구성안·남은 일정을
+한 번에 정리한 자료다. 새 Claude 대화에서 이 파일 전체를 붙여넣고 논문 작성(초안,
+특정 섹션 집필, 표/그림 캡션, Abstract, Limitations 등)을 요청하는 용도로 쓴다.
+
+이 버전은 0729_0900_prompt.txt(2026-07-29 09:00 KST 작성) 이후 진행된 내용을 반영한
+갱신판이다 — 핵심 변화 네 가지:
+(1) **§4.1 diagonal grid가 사실상 거의 다 끝났다.** 0900판은 진행률을 52%(11/21)로
+    보고했으나, 이는 §4.1의 "정식" 6조건(english_only/korean_only/chinese_only/
+    swahili_only/bengali_only/mixed_5lang, `phase1_41_headline_gate.py` 기준 —
+    아래 (2) 정정 참고)이 아니라 잘못된 7조건 목록(english_only_b/korean_only_b를
+    메인 대각선 칸으로 착각)을 추적하고 있었다. **정정된 정식 6조건 기준으로는
+    bengali_only(0/3, svd_scale 진행 중) 하나만 남고 나머지 5조건(english_only/
+    korean_only/chinese_only/swahili_only/mixed_5lang) 전부 3 seed 완료됐다 —
+    사실상 18/21(86%), 사전등록 게이트(headline gate)를 막는 건 bengali_only뿐이다.**
+(2) **조건 이름 정정(중요, 다음 세션이 반드시 알아야 함)**: `english_only_b`/
+    `korean_only_b`/`swahili_only_b`는 §4.1 Table 1의 대각선(own-language) 칸이
+    아니라 **noise-floor 전용 placebo 대조 조건**이다. 실제 대각선 칸은 `english_only`/
+    `korean_only`/`chinese_only`/`swahili_only`/`bengali_only`(접미사 `_b` 없음)이며,
+    이 5개 디렉토리는 0900판이 미처 추적하지 못했을 뿐 실제로는 대부분 이미 완료돼
+    있었다. `phase1_41_headline_gate.py`(2026-07-27 사전 등록, 이 프롬프트의 §3.19가
+    갱신판 근거)가 이 구분을 코드로 명시한 권위 있는 소스다 — 상세는 §3.19.
+(3) **§6(불일치-표적 calibration 예산 배분) 실험이 완전히 끝났다 — 결과는 negative:
+    NOT_SUPPORTED.** 두 변형(무제약/cap50) 모두 사전등록 게이트("Balanced를 3 seed
+    전부 이겨야 기여를 주장한다")를 통과하지 못했다. 원인 분석까지 이미
+    `01_plans/06_불일치표적배분_실측결과.md`에 완료돼 있다 — 상세는 §6(갱신).
+(4) **원격 A100(RunPod) 관련 서술을 전부 제거했다.** 사용자 확인: A100은 최종 논문의
+    기여에 전혀 포함되지 않으므로, 역사적 기록으로도 더 이상 남기지 않는다. 이전판의
+    §3.16(RunPod 종료 기록)과 GPU 절의 A100 관련 문단은 이 판에서 완전히 삭제했다 —
+    최종 파이프라인은 처음부터 끝까지 로컬 4x3090이었던 것으로만 서술할 것.
+
+작성 기준 시각: 2026-07-29 15:30 KST (2026-07-29 06:30 UTC 세션에서
+`/mnt/HDD/minjeong/d2moe_results/phase1`, `otter/scripts/phase1_41_headline_gate.py`,
+`otter/01_plans/06_불일치표적배분_실측결과.md`, ps/nvidia-smi 라이브 상태를 직접 확인)
+작업 디렉토리: /home/minjeong/project/FERRET/otter/
+원본 문서: otter/00_docs/01~07, otter/01_plans/(claude_plan.md v3,
+  06_불일치표적배분_실측결과.md), otter/RUN_STATE.md(주의: 2026-07-28 10:17 이후
+  미갱신 — RunPod pod 관련 내용은 모두 폐기된 옛 정보이므로 참고하지 말 것),
+  /mnt/HDD/minjeong/d2moe_results/phase1/*.json(실측 원본)
+
+===============================================================================
+0. 한눈에 보는 현재 상태
+===============================================================================
+
+제목(잠정): "Does Calibration Language Matter for Compressing Multilingual
+Mixture-of-Experts Models?" (대안 제목 후보는 §2 참고)
+
+연구 질문(최종): "Does the language composition of calibration data affect
+which experts and parameters are preserved by training-free MoE compression
+(D²-MoE), and consequently alter multilingual performance retention?"
+
+진행 파이프라인과 판정 (■ = 이번 갱신에서 새로 추가/변경된 항목):
+
+  Toy0 -> Phase 0.5 -> Layer-locality -> Fisher Pilot A -> Phase 1 pilot ->
+  Phase 1 예산정상화+seed3 -> Placebo 검증 -> 저자원 언어(Swahili) 추가 ->
+  Fisher-merge lossless -> Whitening 2x2 -> Structured pruning ablation
+      (이 10단계는 0727_2300판과 완전히 동일, 변경 없음 — §3.1~3.15 참고)
+  ■  -> §4.1 diagonal grid (6조건 x 3 seed = 18 run, 정식 조건명 정정)
+             english_only/korean_only/chinese_only/swahili_only/mixed_5lang    18/18 중
+             전부 3 seed 완료. bengali_only만 0/3(svd_scale 진행 중, seed2가
+             현재 GPU에서 도는 중, seed0/1은 대기).  **17/18 완료(94%),
+             bengali_only만 병목.** noise-floor placebo 3조건(english_only_b/
+             korean_only_b/swahili_only_b)도 8/9 완료(swahili_only_b seed2만
+             진행 중). 사전등록 headline gate(`phase1_41_headline_gate.py`)는
+             ALL_CONDITIONS(bengali_only 포함) 완료를 요구하므로 아직 공식
+             실행은 안 됨 — 이 프롬프트 §3.19에 **수동으로 미리 계산한 예비
+             판정**을 실어둔다(공식 판정 아님, bengali_only 완료 후 스크립트
+             재실행 필수).
+  ■  -> §6 Disagreement-aware targeted calibration           **완료, NOT_SUPPORTED
+             (disagreement_targeted / _cap50, 3 seed 전부)      (negative result)**.
+                                                                두 변형 모두 Balanced를
+                                                                못 이김. 원인 분석까지
+                                                                완료(§6 갱신 참고).
+
+EACL 제출 계획(v3, claude_plan.md, 마감 D-0=2026-08-04) 핵심은 이전판과 동일 —
+언어 6개 확정, novelty는 "단계별 원인 규명"으로 재정의, expert-balanced 비교
+Must-have(단, §6 결과가 negative이므로 이 항목의 해석이 바뀜 — §6/§8 참고).
+**원격 A100/RunPod는 최종 파이프라인에 전혀 등장하지 않는다 — 처음부터 끝까지
+로컬 4x3090에서 전량 재현 가능하다고만 서술할 것(더 이상 언급할 "역사"도 없음).**
+
+===============================================================================
+1. 연구 배경과 위치
+===============================================================================
+(0727_2300판/0729_0900판과 동일, 변경 없음 — 그대로 유지)
+
+D²-MoE는 AWQ/GPTQ 같은 quantization이 아니라, expert weight를 shared base +
+expert-specific delta로 분해하고 Fisher-weighted merging / activation-aware SVD
+(whitening) / structured pruning(pp_ratio)을 쓰는 training-free MoE 압축 방법이다.
+이 프로젝트는 새 압축 알고리즘을 제안하지 않고, calibration corpus의 "언어 구성"이
+이 압축 절차(어떤 expert/parameter가 보존되는지)와 압축 후 다국어 성능에 미치는
+영향을 체계적으로 검증한다. 단, §6(제안 방법)에서 calibration *sampling 전략*
+하나는 제안했으나(압축 알고리즘 자체는 불변), 그 검증 결과는 negative다(§6 참고).
+
+**연구 공백 (선행 연구 대비)**
+- Transfer gap: dense PTQ(quantization)에서 확인된 "calibration 언어가 중요하다"는
+  결과가 training-free MoE decomposition(D²-MoE)에도 적용되는지 검증한 선행 연구 없음.
+- Localization gap: 효과가 있다는 것을 넘어 어느 레이어, 파이프라인의 어느 하위
+  단계(Fisher merge/whitening/pruning)에서 발생하는지 짚은 선행 연구 없음.
+- Cross-validation gap: forward-only proxy 신호가 실제 gradient 기반 Fisher와
+  일치하는지 교차검증한 선행 연구 없음.
+- Prescription gap: 진단에서 그치지 않고 같은 calibration 비용 안에서 효과를
+  완화하는 구체적 방법을 제안·검증한 선행 연구 없음(■ 본 연구는 이 gap을 시도했으나
+  제안한 구체적 방법 하나는 실패했다는 negative result로 채웠다 — §6 참고. gap
+  자체가 어렵다는 것을 보이는 것도 기여로 서술 가능).
+
+**[2026-07-27 랩 피드백] novelty 재정의**: "calibration 언어가 압축 결과를
+바꾼다"는 효과 자체(Transfer gap)는 dense quantization/pruning 문헌에 이미
+보고돼 있어 그것만으로는 본 논문의 기여로 약하다는 지적이 있었음. 본 논문의
+핵심 novelty는 **Localization gap**(D²-MoE 파이프라인 단계별 — Fisher 병합/
+SVD whitening/structured pruning — 원인 규명)로 재정의한다. Transfer gap
+확인(§4.1)은 필요한 전제 확인 단계이지 논문의 핵심 주장이 아니다.
+
+**Fisher-merge only 결과 재확인**: Fisher-merge 단계는 lossless 단위 테스트로
+확인 완료(§3.11). whitening 단계도 seed 3개+placebo로 확정됐다(§3.12,
+SUPPORTED). pruning 단계는 §3.13(korean_only 단일 조건) ablation으로 확인됨.
+
+**참고/비교 대상 문헌**: D²-MoE(기준), Calibrating Beyond English(dense PTQ
+calibration 언어 영향 선행 연구), MoEQuant(expert-balanced calibration 필요성),
+MoE-I²/MoBE(§7 일반화, future work로 컷). — 0727_2300판과 동일, 변경 없음.
+
+**본 연구의 기여 요약 (■ 4번 갱신)**
+1) D²-MoE 기반 training-free MoE compression에서 calibration language 영향을
+   체계적으로 평가한 최초의 다국어 분석.
+2) EN-only/target-language/multilingual calibration을 동일 token budget 아래
+   비교하고 평균 성능뿐 아니라 worst-language robustness 분석.
+3) routing coverage, Fisher importance, whitening activation statistics,
+   SVD energy, structured pruning 민감도 분석으로 calibration 언어와
+   압축 후 성능의 관계를 단계별로 설명.
+4) ■ (검증됨, negative) 불일치(disagreement) expert에 calibration 예산을 표적
+   배분하는 calibration sampling 전략을 제안·검증했으나 Balanced를 이기지
+   못했다(NOT_SUPPORTED) — 이유는 "라우팅 불일치"가 "압축 후 실제 저하"의
+   좋은 프록시가 아니었기 때문임을 원인 분석으로 보였다(§6). 이 자체를
+   방법론적 negative result로 논문화할지, §6을 대안(예: 단일언어 self-calibration
+   저하량 기반 신호로 교체)으로 재시도할지는 미결정 — 사용자 판단 필요(§8).
+"새로운 압축 알고리즘"이나 "SOTA"는 주장하지 않는다.
+
+===============================================================================
+2. 논문 구성 (섹션 골격) — 06_논문_구성.md / 05_Research_Report.md 기반
+===============================================================================
+(0729_0900판과 동일, 변경 없음)
+
+구성: 1 Introduction -> 2 Related work -> 3 Preliminary -> 4 Experiments
+(4.1 주 실험, 4.2 파생 분석, 4.3 단계 분리) -> 5 Mechanism analysis ->
+6 Proposed method -> [7 Generalization: EACL 일정상 future work로 컷, 본문
+제외] -> 8 Discussion & Limitations -> 9 Conclusion
+
+사슬 구조: §4(진단) -> §5(원인) -> §6(처방, 이번 판 기준 negative result).
+§7(일반화)은 컷 확정, 본문에서는 1문장짜리 future work로만 언급.
+
+--- 3. Preliminary: D²-MoE 압축 파이프라인 다이어그램 ---
+(변경 없음, 0729_0900판 그대로)
+
+calibration corpus C_lang -> [1] Expert routing frequency(forward pass) ->
+[2] Fisher importance F_e(gradient) -> [3] Fisher-weighted merge:
+W_base = sum_e (F_e/sum F) * W_e -> [4] delta_e = W_e - W_base, SVD(delta_e)
+with activation-aware whitening -> low-rank delta 유지 -> [5] structured
+pruning(pp_ratio) -> compressed model M'_C -> FLORES-200 다국어(EN/KO/ZH/
+Swahili/Bengali) bits-per-byte 평가.
+
+--- 4.1 주 실험: calibration 언어에 따른 언어별 성능 격자 ---
+
+질문: calibration 언어를 바꾸면 압축 모델의 언어별 성능이 달라지는가? 특히
+"자기 언어로 calibration하면 그 언어가 더 잘 보존되는가"(own-language 이득)?
+
+**■ 실측 커버리지(2026-07-29 15:30 기준, 대폭 갱신)**: 정식 6조건 중
+english_only/korean_only/chinese_only/swahili_only/mixed_5lang **5조건 전부
+3 seed 완료**. bengali_only만 fisher는 3 seed 다 끝났고 svd_scale이 아직
+못 끝났다(0/3) — 상세는 §3.19. **§4.1을 "완료"로 쓰려면 bengali_only 3 seed의
+svd_scale+merge_eval만 남았다.**
+
+--- 4.2 파생 분석: 취약한 언어일수록 효과가 큰가 ---
+
+가설(취약도-비례): "타 언어로 calibration했을 때 저하가 큰(취약한) 언어일수록
+자기 언어 calibration의 이득이 크다." **■ 이제 EN/KO/ZH/Swahili 4개 언어의
+own-language 데이터 포인트가 모두 있다(§3.19)** — Bengali(가장 저하가 클
+것으로 예측된 언어, baseline bpb 기준으로는 오히려 가장 안전했던 이례적
+언어)만 완주되면 5번째 포인트로 이 가설을 훨씬 강하게 검증할 수 있다.
+baseline bpb 취약도 순서(변경 없음): EN 0.9137 < Bengali 0.8857(가장 안전) <
+ZH 1.0776 < KO 1.3697 < Swahili 2.2429.
+
+--- 4.3 단계 분리 실험 ---
+(변경 없음, 0729_0900판과 동일 — VERDICT: WHITENING_DOMINANT, §3.12/§3.13 참고)
+
+--- 5. 메커니즘 분석 ---
+(변경 없음, §3.15 Stage 1 결과가 그대로 §5-2 근거로 유지됨)
+
+--- 6. 제안 방법: 불일치-표적 calibration budget 배분 [■ 완료, negative] ---
+
+**결론(사전등록 게이트 실행 결과, `phase1_6_budget_gate.py`)**: 무제약/cap50
+두 변형 모두 "Balanced를 3 seed 전부 이겨야 기여를 주장한다"는 유일한
+사전등록 기준을 통과하지 못했다 — **NOT_SUPPORTED**. `disagreement_targeted`는
+3/3 seed 전부 패배, `disagreement_targeted_cap50`은 3 seed 중 1개만 근소
+승리(3/3 요구 미충족). 상세 원인 분석은 §6(갱신) 참고.
+
+--- 7. 일반화 검증 (컷 확정, 미실행) ---
+(변경 없음)
+
+===============================================================================
+3. 전체 실험 결과 (실측치 전부, 시간순 — 3.1~3.15는 이전판과 동일 내용 유지,
+   3.16~3.18은 이번 판에서 A100 관련 서술 삭제, 3.19부터 갱신)
+===============================================================================
+
+--- 3.1~3.15 : 이전판과 동일, 변경 없음 ---
+
+내용 요약만 남기고 본문은 0727_2300_prompt.txt §3.1~3.15 원문을 그대로 참고할 것
+(Toy0 PASS, Phase 0.5 PROGRESS_PASS, Layer-locality SPREAD_BACK_HALF, Fisher
+Pilot A rho=0.870, Phase 0/1, Placebo 검증(KO/Swahili SUPPORTED), Fisher-merge
+lossless 확인, whitening 2x2 SUPPORTED(5.66배, §3.12), pruning on/off
+ablation(korean_only, §3.13), disagreement-aware calibration Stage 1
+실측(§3.15: deficiency 36쌍 중 Swahili 31/Bengali 5/나머지 0)).
+
+--- 3.18 로컬 전용 파이프라인 실행 방식 (■ A100/RunPod 서술 삭제, 나머지 유지) ---
+
+**최종 파이프라인은 처음부터 끝까지 로컬 4x3090(24GB x4) 하나로만 실행됐다.**
+재현성/Methods 서술에 반영할 실행 방식 두 가지(0727_2300판 이후 확정, 변경 없음):
+
+1) **merge_eval(최종 압축+평가 단계)은 항상 GPU 2장을 페어링해서 실행한다.**
+   DeepSeek-MoE-16B는 bf16 기준 약 31GB로, 24GB 3090 1장에는 들어가지 않는다.
+   1장으로 강제 실행하면 부분적으로 disk/cpu offload가 걸려 수치가 불안정해지는
+   현상이 확인되어, merge_eval 단계만은 반드시 GPU 2장을 동시에 확보해 모델
+   전체가 VRAM에 완전히 올라간 상태에서 실행하도록 파이프라인을 고정했다.
+   Fisher/SVD-scale 단계는 GPU 1장으로 안정적으로 동작한다.
+2) 여러 GPU가 서로 다른 조건/seed를 동시에 처리하다 merge_eval 단계에서
+   보조 GPU를 공유해야 할 때는 파일 락(flock)으로 직렬화한다.
+3) 각 단계는 실패 시 최대 40회, 90초 간격으로 자동 재시도한다.
+
+하이퍼파라미터(delta_ratio=0.8, pp_ratio, calibration 예산 64 samples x
+seqlen 512)는 전혀 바뀌지 않았다 — 바뀐 것은 GPU 자원 배분 방식뿐이다.
+
+--- 3.19 §4.1 diagonal grid 정식 6조건 진행 현황 (2026-07-29 15:30 KST 기준,
+       실측, ■■ 신규·이 프롬프트에서 가장 중요한 실시간 정보) ---
+
+**조건 이름 정정부터**: 정식 §4.1 대각선 조건은 `phase1_41_headline_gate.py`
+기준 `{english_only, korean_only, chinese_only, swahili_only, bengali_only,
+mixed_5lang}`이다. `english_only_b`/`korean_only_b`/`swahili_only_b`는
+별개의 noise-floor 전용 placebo 조건으로, own_gain 판정에서 "±"(대각선
+이득)이 아니라 "잡음 하한선" 계산에만 쓰인다. 두 그룹을 섞어서 세지 말 것 —
+0729_0900판은 이 둘을 섞어 세는 바람에 진행률을 과소평가했다(52% -> 실제로는
+아래처럼 훨씬 진행돼 있었음).
+
+**정식 6조건 x 3 seed = 18 run 기준**:
+
+| 조건 | seed0 | seed1 | seed2 | 비고 |
+|---|---|---|---|---|
+| english_only | 완료 | 완료 | 완료 | 3/3 |
+| korean_only | 완료 | 완료 | 완료 | 3/3 |
+| chinese_only | 완료 | 완료 | 완료 | 3/3 (0729_0900판엔 1/3로 잘못 기록돼 있었음) |
+| swahili_only | 완료 | 완료 | 완료 | 3/3 (0729_0900판엔 0/3으로 기록돼 있었음) |
+| mixed_5lang (Balanced) | 완료 | 완료 | 완료 | 3/3, 0729_0900판과 동일 |
+| **bengali_only** | fisher만 완료(svd 2/27 layer, 정체) | fisher만 완료(svd 0/27, 미착수) | fisher만 완료(svd 진행 중, 현재 GPU1에서 처리 중) | **0/3, 유일한 병목** |
+
+**합계: 17/18 run 완료(94%).** noise-floor placebo(english_only_b/
+korean_only_b/swahili_only_b, 9 run 기준)는 8/9 완료(swahili_only_b seed2만
+svd_scale 진행 중, GPU0에서 처리 중).
+
+**bengali_only 상세(가장 뒤처진 이유, 에러 아님)**: seed2는 방금(06:20 UTC)
+GPU1에서 svd_scale을 새로 시작했다(0/27 layer, 진행 중). seed0은 이전에
+layer 2/27까지 갔다가 프로세스가 죽어 있고(현재 재개 안 됨), seed1은
+아직 아무 GPU에도 배정되지 않았다. **다음 세션에서 seed0/seed1 svd_scale을
+GPU에 배정하는 것이 §4.1을 끝내기 위한 최우선 작업.**
+
+**headline gate 공식 판정은 아직 안 됨** — `phase1_41_headline_gate.py`는
+6조건 x 3 seed 전부(bengali_only 포함)가 있어야 실행되도록 설계돼 있어
+(missing-file 가드), bengali_only 3 seed가 채워지기 전까지는 스크립트를
+그대로 실행해도 "NOT READY" 메시지만 나온다. **아래는 bengali_only를 제외한
+4개 언어(EN/KO/ZH/Swahili)에 대해 이 세션이 headline gate와 동일한 산식으로
+수동 계산한 예비 수치다 — 공식 판정이 아니므로 논문 본문에 "확정"으로 쓰지
+말고, bengali_only 완료 후 반드시 스크립트를 다시 돌려 공식 수치로 교체할 것.**
+
+own_gain(L) = mean(다른 언어 조건들의 L 저하율) − matched(L) 조건의 L 저하율
+noise_floor(L) = max_seed |matched(L) 저하율 − placebo(L) 저하율|  (EN/KO/Swahili만)
+
+| 언어 | seed별 own_gain(%p) | 부호 일관성 | noise_floor(%p, max) | 2x floor | 예비 판정 |
+|---|---|---|---|---|---|
+| English (eng_Latn) | 4.13 / 5.26 / 4.56 | 일관 | 4.05 | 8.09 | INCONCLUSIVE (gain < 2x floor, 이전판과 동일 결론 유지) |
+| Korean (kor_Hang) | 73.33 / 73.70 / 76.07 | 일관 | 0.79 | 1.58 | **SUPPORTED, 매우 강함**(gain이 floor의 ~93배) |
+| Chinese (zho_Hans) | 10.38 / 9.12 / 9.47 | 일관 | placebo 없음 | — | SIGN_CONSISTENT_NO_FLOOR (방향은 신뢰 가능, 크기는 잡음 대비 미검증) |
+| Swahili (swh_Latn) | 36.67 / 34.19 / 36.00* | 일관 | 0.58* | 1.15* | **SUPPORTED, 매우 강함**(gain이 floor의 ~31배) |
+
+*Swahili는 placebo(swahili_only_b) seed2가 아직 없어 noise_floor를 seed0/1
+2개로만 계산(참고치). Bengali는 own_gain 계산 자체가 불가(bengali_only 자료 없음).
+
+**주의**: 위 KO/Swahili own_gain(각 74%p, 35%p 안팎)은 §3.12(whitening 단독
+2x2 실험, KO 38.95%p)보다 훨씬 크다 — 이는 모순이 아니라 서로 다른 양을 잰
+것이다. §3.12는 "whitening 단계 하나만 언어를 바꿨을 때"의 이득이고, 여기
+§3.19는 "Fisher+whitening+pruning 전체 파이프라인을 언어별로 다르게
+calibration했을 때"의 이득이다. 두 수치를 같은 표에 놓거나 서로 대체하지
+말 것 — 논문에서는 반드시 "전체 파이프라인 own-language gain"(§4.1, 이 표)과
+"whitening 단계만의 기여"(§4.3, §3.12)를 구분해서 서술할 것.
+
+**Table 1 원자료 (calib 조건 x 평가 언어, baseline 대비 bpb 상대 증가율 %,
+3 seed 평균, whitening-ON 전체 파이프라인, 소수점 둘째 자리)**:
+
+| Calib \\ Eval | English | Korean | Chinese | Swahili | Bengali |
+|---|---|---|---|---|---|
+| English  | 7.28  | 88.76 | 13.80 | 33.09 | (평가 안 됨, 백필 필요) |
+| Korean   | 12.68 | 3.86  | 12.68 | 38.52 | (평가 안 됨, 백필 필요) |
+| Chinese  | 10.29 | 79.28 | 4.24  | 35.10 | 87.41 |
+| Swahili  | 12.83 | 66.65 | 15.20 | -0.05 | 75.06 |
+| Bengali  | 미완료 | 미완료 | 미완료 | 미완료 | 미완료 |
+| Balanced | 9.29  | 5.36  | 7.10  | 2.83  | 2.90 |
+
+("평가 안 됨"인 English/Korean × Bengali 칸: 이 두 조건이 Bengali가 평가
+언어 목록에 추가되기 전에 실행돼 eval_ppl.json에 ben_Beng 키 자체가 없다 —
+모델 재압축은 필요 없고 같은 merge 결과에 대해 Bengali eval만 백필하면 채울
+수 있다. 우선순위는 bengali_only 완주보다 낮음, §8 참고.)
+
+**해석 메모**: Swahili own-language 칸(-0.05%)은 baseline보다도 살짝 낮다 —
+즉 Swahili로 calibration하면 Swahili 성능이 사실상 압축 손실 없이 보존된다.
+반대로 English/Korean/Chinese로 calibration했을 때 Swahili 저하는 33~39%로
+크다. 이 비대칭이 own-language 이득이 Swahili에서 가장 극적으로 나타나는
+이유다. Balanced(mixed_5lang) 행은 모든 언어에서 2.83~9.66% 사이로 가장
+고르다 — "단일 언어보다 못하지만 최악의 경우를 피한다"는 §4.1/§4.2의
+핵심 그림을 그대로 뒷받침한다.
+
+--- 3.20 로컬 GPU 실시간 점유 현황 (2026-07-29 15:30 KST 스냅샷, 참고용) ---
+
+```
+GPU0: ~21.3GB/24.6GB, swahili_only_b seed2 svd_scale 진행 중(05:09 UTC 시작,
+      layer 10/27 부근)
+GPU1: ~21.3GB/24.6GB, bengali_only seed2 svd_scale 진행 중(06:20 UTC 시작,
+      layer 0~수 개 진행)
+GPU2: ~19.5GB/24.6GB, 다른 사용자(kahyeon) 프로세스가 사용 중(05:57 UTC부터) —
+      이 세션 소관 아님, 건드리지 말 것
+GPU3: 유휴
+```
+디스크(`/mnt/HDD`) 98% 사용, 148GB 여유 — 계속 빠듯하다. bengali_only의
+남은 svd_scale/merge_eval 단계에서 조건-시드당 최대 +34GB 임시 파일이
+추가로 생길 수 있어 여유가 크지 않다. `svd_scale_layers`/`fisher_layers`는
+완료 즉시 자동 삭제되도록 스크립트가 이미 처리하므로(§3.18) 정상 진행 중이면
+문제 없지만, 디스크 여유가 100GB 밑으로 떨어지면 바로 확인할 것.
+
+===============================================================================
+4. 핵심 그림 (otter/0726_results/, 갱신)
+===============================================================================
+(0729_0900판과 동일, 변경 없음)
+
+Figure 1~4는 이전판과 동일. **신규 Figure/Table 후보**: §4.1 Table 1은
+bengali_only 완주 후 Bengali 행/열만 채우면 완성(§3.19에 원자료 이미 있음).
+Figure 4b/Table 2(Fisher/whitening/pruning 막대그래프)는 여전히 미생성.
+Figure 5/Table 3(§6 주 비교)은 **negative result 확정됐으므로**, "제안법이
+이겼다"는 그림 대신 "제안법이 왜 졌는가"를 보여주는 원인 분석 그림(§6 참고,
+언어별 예산-성능 곡선 등)으로 방향을 바꿀 필요가 있음 — 다음 세션 판단 필요.
+
+===============================================================================
+5. 방법론 상세 (재현성/Methods 섹션용, ■ GPU 절 전면 재작성 — A100 서술 완전 삭제)
+===============================================================================
+
+**모델**: Qwen3-30B-A3B(bf16, 48레이어, forward-only 진단 전용, 압축 실험에는
+미사용) / deepseek-ai/deepseek-moe-16b-base(bf16 ~31GB, 28레이어: 0번 dense+
+1~27 MoE, 64 experts/레이어, 실제 압축 대상). — 변경 없음.
+
+**압축 방법**: 공식 D²-MoE repo(github.com/lliai/D2MoE, Apache-2.0).
+Fisher-weighted merge(merge_method="fisher") + SVD delta(delta_ratio=0.8,
+실사용 rank=667/full 1408) + whitening(3 seed+placebo로 확정) + structured
+pruning(pp_ratio=0.2, korean_only 조건 ablation으로 확정). — 변경 없음.
+
+**Calibration 데이터**: `israel/flores-parallel`(HF, FLORES-200 parallel test
+split). 언어 조건: English/Korean/Chinese/Swahili/Bengali(각각 단일언어
+100%) + Balanced(mixed_5lang, 5언어 균등 혼합). calibration 예산: 64 samples
+x seqlen 512(모든 조건 동일). — 변경 없음.
+
+**평가**: FLORES-200 devtest, 언어당 held-out 60문장, 지표는 bits-per-byte(bpb)의
+압축 전 대비 상대 증가율(%). calibration pool은 평가용 앞 60개와 완전 분리. —
+변경 없음.
+
+**Seed**: 조건당 3개(0/1/2). ■ english_only/korean_only/chinese_only/
+swahili_only/mixed_5lang은 3 seed 전부 완료. bengali_only만 fisher 3 seed
+완료, svd_scale/merge_eval 미완료(§3.19).
+
+**Placebo(noise floor) 설계**: 동일 언어의 겹치지 않는 다른 표본으로
+calibration한 대조 조건(english_only_b/korean_only_b/swahili_only_b)을 별도로
+둔다 — Chinese/Bengali는 예산 우선순위상 placebo 조건을 두지 않았다(원래부터의
+설계, 변경 없음). ■ 세 placebo 조건 중 english_only_b/korean_only_b는 3/3,
+swahili_only_b는 2/3 완료(seed2 진행 중).
+
+**통계 검정**: Spearman correlation, bootstrap 95% CI, 사전 등록. §4.1은
+own-language 판정에 한해 seed 3개가 신뢰구간을 내기엔 적어 **부호 일관성 +
+2x noise-floor 여유**를 사전등록 기준으로 쓴다(§3.19 표 참고).
+
+**■ GPU/실행 환경 (전면 재작성, A100/RunPod 서술 전부 제거)**:
+- 실행 환경은 처음부터 끝까지 로컬 호스트 하나뿐이다: 공유 4x3090(24GB x4).
+  모든 실험(§4.1 grid, §4.3 단계 분리, §6 제안 방법 검증 포함)이 로컬
+  4x3090만으로 재현 가능하다.
+- Fisher 계산(진짜 gradient)은 레이어별 freeze-and-accumulate 트릭으로 GPU
+  1장(24GB)에서 27개 레이어 전체 계산 가능함이 실증됐다.
+- **merge_eval(최종 압축+평가)만은 GPU 2장을 동시에 페어링해서 실행한다**
+  (§3.18) — 24GB 1장으로는 ~31GB 모델 전체가 VRAM에 안 들어가 일부 offload가
+  걸리고, 이 경로에서 결과가 불안정해지는 현상이 있어 방지 차원에서 고정한
+  실행 방식. Fisher/SVD-scale 단계는 GPU 1장으로 안정적.
+- `00_config.py`/`safe_gpus.sh`가 매 실행 시작 시 nvidia-smi+ps로 GPU별
+  프로세스 소유자를 확인, 다른 사용자 프로세스가 있는 GPU는 자동 제외
+  (현재 GPU2가 다른 사용자 프로세스로 자동 제외된 상태, §3.20 참고).
+- Structured pruning(§3.13), disagreement-targeted(§6) 관련 계산도 전부
+  로컬 3090에서 실행. 디스크(`/mnt/HDD`)는 98% 사용 중으로 빠듯하다 — 완료된
+  레이어 단위 임시 체크포인트는 각 단계 종료 직후 자동 삭제된다(§3.18).
+
+**conda 환경 분리**: `torch_env`(Qwen3 진단용)와 `d2moe_env`(D²-MoE 전용)
+완전 분리 — 변경 없음.
+
+===============================================================================
+6. 논문 주장의 현재 형태 (2026-07-29 15:30 기준, 방어 가능성별로 구분, ■ 대폭 갱신)
+===============================================================================
+
+**유지(강하게 방어 가능, 이전판과 동일):**
+- calibration 언어가 D²-MoE가 참조할 routing/importance 통계를 바꾼다는 핵심
+  주장(RQ4).
+- "네트워크 마지막 ~20% 블록에서 calibration-language sensitivity가 점증".
+- Fisher-merge delta 분해 자체는 lossless.
+- whitening이 KO 보호의 주범(WHITENING_DOMINANT, §3.12, 5.66배).
+- structured pruning도 KO/ZH를 일관되게 해친다(korean_only 단일 ablation).
+- 불일치(disagreement) expert가 저자원 언어(특히 Swahili)에 집중된다(§3.15).
+
+**■ 신규로 강하게 방어 가능해진 것 (수동 예비 계산, 공식 gate 재실행 전까지는
+"예비"로 표기):**
+- **Korean own-language 이득**: 전체 파이프라인 기준 gain≈74%p, noise
+  floor≈0.79%p — 압도적으로 SUPPORTED(§3.19). §3.12(whitening 단독 38.95%p)와는
+  다른 양이니 혼동 금지.
+- **Swahili own-language 이득**: gain≈35%p, noise floor≈0.58%p(seed2 placebo
+  없이 계산한 참고치) — 압도적으로 SUPPORTED. Swahili own-language 칸은
+  baseline보다도 낮아(-0.05%) 사실상 무손실.
+- **Chinese**: 3 seed 모두 부호 일관(gain≈9.7%p) — SIGN_CONSISTENT_NO_FLOOR
+  (placebo 없어 크기 대 잡음 비교는 미검증, 방향은 신뢰 가능).
+
+**미확정/부분 검증:**
+- EN own-language 이득 — INCONCLUSIVE(변경 없음, gain 4.65%p < 2x floor
+  8.09%p).
+- Bengali own-language 효과 — 여전히 계산 불가(bengali_only 미완료). 다만
+  이제 English/Korean/Chinese/Swahili 4개 언어가 다 채워졌으므로, Bengali만
+  완주되면 §4.1 headline gate를 즉시 공식 실행할 수 있는 상태.
+
+**■ 확정된 negative result:**
+- **§6 disagreement-aware calibration은 Balanced를 이기지 못한다
+  (NOT_SUPPORTED)** — 무제약 변형은 3/3 seed 패배, cap50 변형은 1/3만 근소
+  승리. 원인: Stage 1의 "라우팅 불일치" 프록시가 측정하는 것(이 언어가 이
+  전문가에서 calibration 샘플을 충분히 받았는가)과 실제 문제(이 언어가
+  압축 후 얼마나 나빠지는가)가 이 실험 조건에서는 상관관계가 약하거나
+  반대 방향이었다. 결정적 반증: cap50이 Bengali에 Balanced보다 더 많은
+  예산(35%>20%)을 줬는데도 여전히 졌다 — "예산 부족"이 원인이 아니라
+  "엉뚱한 expert에 집중했다"는 것을 시사한다. 게다가 Bengali는 단일언어
+  100% calibration(이론적 최선)으로도 저하율이 Swahili보다 훨씬 크다
+  (Bengali 17.5~17.8% vs Swahili 12.8~13.5%) — Bengali는 예산 배분 전략과
+  무관하게 이 압축 파이프라인에 원래 더 취약한 언어로 보인다. 상세 근거는
+  `01_plans/06_불일치표적배분_실측결과.md` 전문 참고.
+
+**범위 한정 문구(반드시 지킬 것, 이전판과 동일)**: whitening까지는 "D²-MoE의
+Fisher-merge+whitening 경로가 calibration 언어에 민감하다"로 확장해서 쓸 수
+있다. pruning까지 포함해 쓰려면 korean_only 조건 하나의 ablation이라는 범위를
+명시할 것.
+
+===============================================================================
+7. 한계 (Limitations 섹션 초안 재료, ■ 갱신 — A100 관련 항목 완전 삭제)
+===============================================================================
+
+- 실제 압축 결과는 DeepSeek-MoE-16B 한 아키텍처에 한정 — §7 일반화는 future
+  work로 컷.
+- calibration과 평가 데이터가 FLORES-200으로 상당 부분 겹쳐 도메인 겹침
+  confound 완전 배제 못함.
+- Structured pruning 경로는 korean_only 조건 하나의 on/off ablation으로만
+  확인됐다 — 전체 grid 검증은 스코프 밖.
+- Downstream task(XNLI, MGSM, Belebele 등) 평가 아직 없음.
+- 다룬 언어는 EN/KO/ZH/Swahili(완료) + Bengali(진행률 최저, fisher만 완료).
+  시간이 더 부족해지면 Bengali를 §4.1 Table 1에서 각주 처리하거나 제외하는
+  것을 컷라인으로 고려(§8).
+- **■ §6 제안 방법(disagreement-aware calibration)은 확정적으로 실패했다
+  (NOT_SUPPORTED, §6 참고). Limitations이 아니라 negative result로서 본문
+  §6 자체에서 정직하게 보고할 것 — 숨기거나 "미검증"으로 얼버무리지 말 것.**
+- §5(메커니즘) 4갈래 분석 중 ③④(SVD basis rotation, 인과 사슬 검증)가
+  여전히 미착수.
+- 재현 환경은 로컬 공유 GPU 서버(4x3090) 하나뿐이며, 다른 사용자와 공유하는
+  환경이라 실행 시점의 GPU 가용성에 따라 진행 속도가 들쭉날쭉했다 — 이 자체는
+  결과의 타당성에 영향 없는 인프라 요인.
+
+===============================================================================
+8. EACL 제출 일정 및 압축 일정 (■ 대폭 갱신)
+===============================================================================
+
+**claude_plan.md v3 원 일정**: 마감 D-0=2026-08-04. Must-have: §4.1
+full-pipeline 그리드, placebo, §4.3 단계 분리, §6 vs Balanced 및
+expert-balanced. Cut 확정: §7 일반화 전체.
+
+**■ 진행도 재평가**: §4.1은 사실상 94%(17/18) 완료 — bengali_only 3 seed의
+svd_scale+merge_eval만 남았다. §4.3(whitening 2x2, pruning ablation)은 이미
+완료. **§6은 완료됐으나 결과가 negative다** — "Balanced 및 expert-balanced를
+이겨야 한다"는 Must-have 항목 자체가 통과 불가능한 상태이므로, 이 Must-have를
+그대로 유지할지("제안 방법 실패"를 negative result로 논문화) 아니면 §6을
+빼거나 축소할지 사용자 판단이 필요하다(아래 참고).
+
+**claude_plan.md 최종 마감(D-0=8/4) 기준으로는 아직 6일 여유가 있다.**
+실험 쪽은 사실상 bengali_only 하나만 남아 논문 집필로 넘어갈 시간이 이전판
+대비 크게 늘었다.
+
+**남은 작업 우선순위(이 프롬프트 작성 시점 기준, ■ 재정렬)**:
+1. bengali_only 3 seed svd_scale+merge_eval 완주 — seed0(2/27에서 정체)와
+   seed1(미착수)을 GPU에 배정하는 것이 시급, seed2는 이미 진행 중(§3.19/§3.20).
+2. bengali_only 완료 즉시 `phase1_41_headline_gate.py` 공식 재실행 —
+   §3.19의 수동 예비 판정을 공식 수치로 교체하고 Table 1/Figure 1 완성.
+3. **§6 negative result를 논문에 어떻게 반영할지 결정** — (a) 있는 그대로
+   "순진한 라우팅-통계 휴리스틱은 부족하다"는 방법론적 negative result로
+   프레이밍, (b) 개선된 신호(예: 단일언어 self-calibration 저하량 기반)로
+   §6을 재시도, (c) 둘 다 병행. 시간이 부족하면 (a)만으로 §6을 마무리하는
+   것이 가장 현실적 — 실험은 이미 다 끝났고 원인 분석도 이미 문서화돼 있다
+   (`01_plans/06_불일치표적배분_실측결과.md`).
+4. §5 메커니즘 섹션(①② 실측 데이터로 초안 작성 가능, ③④는 미착수 상태로
+   Limitations에 명시).
+5. English/Korean × Bengali eval 백필(우선순위 낮음, Table 1 완성도만 높임).
+6. Limitations/Conclusion/전체 통독.
+
+**컷라인 (시간 부족 시 여기서 자름, ■ 갱신)**:
+- §4.1 Bengali: bengali_only가 계속 지연되면 own-language gain 없이 raw
+  observation만 각주 처리하고 §4.2(취약도-비례) 포인트에서는 제외 — 단,
+  나머지 4개 언어(EN/KO/ZH/Swahili)만으로도 headline gate는 이미 강한
+  결과(KO/Swahili SUPPORTED)를 보여주므로 Bengali 없이도 §4.1 핵심 주장은
+  성립한다.
+- §6: 위 우선순위 3번 참고 — negative result를 그대로 쓰는 (a)안이 사실상
+  기본 컷라인이다(추가 실험 없이 바로 집필 가능).
+- §4.3 pruning: 이미 korean_only 단일 조건으로 축소돼 완료됨 — 추가 컷 없음.
+
+===============================================================================
+9. 이 프롬프트 사용법 (future Claude 세션에게, ■ 갱신)
+===============================================================================
+
+이 파일은 OTTER 프로젝트의 논문 작성을 돕기 위한 배경 지식 전체다. 위 내용을
+바탕으로 다음과 같은 요청에 답할 수 있어야 한다:
+- 특정 섹션(Introduction, Related Work, Preliminary, §4~§9) 초안 작성
+- 특정 표/그림의 캡션 작성
+- Abstract 작성(전체 요약 필요)
+- Limitations 섹션 확장
+- 특정 결과를 다른 방식(예: reviewer 반박, ablation 정당화)으로 재서술
+- 결과 수치의 일관성 검산(위 §3의 실측치가 유일한 근거 — 새로 숫자를 지어내지
+  말 것, 모르는 값은 [TODO]로 표시할 것)
+
+작성 시 유의사항(이전판 1~10 유지, 11~15 신규/갱신):
+1. "새 압축 알고리즘을 제안하지 않는다"는 원칙을 지킬 것.
+2. [가정]/PRELIMINARY 표시 항목은 실측치가 아니므로 최신 상태를 재확인할 것.
+3. own-language 효과는 언어별로 판정이 다르다(KO/Swahili=SUPPORTED(강함),
+   ZH=SIGN_CONSISTENT_NO_FLOOR, EN=INCONCLUSIVE, Bengali=계산 불가) — 뭉뚱그려
+   쓰지 말 것.
+4. 단위 표기: 상대 증가율은 "%", 두 %값의 차이(이득/noise floor)는 "%p".
+5. Fisher-merge와 whitening 경로가 민감하며, whitening이 더 지배적으로 서술.
+   pruning은 korean_only 단일 조건 ablation 범위로 한정.
+6. novelty는 "D²-MoE 단계별(Fisher/SVD/pruning) 원인 규명"으로 서술.
+7. **§6은 negative result다 — "이겼다"는 식으로 서술하지 말 것.** 논문에
+   포함한다면 정직하게 실패로 보고하고 원인 분석(§6, 위 §6 갱신 참고)을
+   본문의 기여로 제시할 것.
+8. 이 파일은 실시간으로 진행 중인 실험(§3.19)의 스냅샷이다. 논문 본문에
+   숫자를 넣기 직전에는 반드시 `/mnt/HDD/minjeong/d2moe_results/phase1/`을
+   재확인할 것. 특히 §3.19의 own_gain/noise_floor 수치는 **이 세션이 수동
+   계산한 예비값**이지 공식 gate 출력이 아니다 — bengali_only 완료 후
+   `phase1_41_headline_gate.py`를 반드시 재실행해 공식 수치로 교체할 것.
+9. ■ **원격 A100/RunPod는 이 프로젝트의 최종 실행 환경에 전혀 등장하지
+   않는다** — 역사적 언급조차 필요 없다. 재현성/Methods 섹션에는 "로컬
+   4x3090만으로 전량 재현 가능"이라고만 쓸 것. 혹시 더 오래된 프롬프트
+   파일(0727_2300 이전)을 참고하게 되면 그 안의 A100/RunPod 관련 문단은
+   전부 무시할 것.
+10. 다음 새 프롬프트 버전을 만들 때는 파일명 규칙(`MMDD_HHMM_prompt.txt`,
+    KST 기준)을 따르고, 이전 버전과의 차이(■ 표시)를 명확히 구분해서 작성할 것.
+11. ■ **`english_only_b`/`korean_only_b`/`swahili_only_b`는 §4.1 Table 1의
+    대각선(own-language) 칸이 아니라 noise-floor placebo 전용 조건이다** —
+    이 둘을 혼동하면 진행률과 판정 모두 틀린다(§3.19 "조건 이름 정정" 참고).
+12. ■ bengali_only가 §4.1의 유일한 병목이다 — 완료 여부를
+    `/mnt/HDD/minjeong/d2moe_results/phase1/bengali_only/seed*/svd_scale_processed.pt`
+    존재로 확인할 것.
+13. ■ §3.19의 KO/Swahili own_gain(각 74%p/35%p 안팎)은 §3.12(whitening 단독
+    실험의 38.95%p)와 다른 실험·다른 양이다 — 같은 표에 섞어 쓰지 말고
+    "전체 파이프라인 gain(§4.1)" vs "whitening 단계만의 기여(§4.3)"로
+    명확히 구분해서 서술할 것.
+14. ■ 로컬 파이프라인의 GPU 배분/재시도 방식(§3.18)은 압축 알고리즘이나
+    평가 방법론과 무관한 실행 인프라 변경일 뿐이다 — Methods 섹션의 "재현
+    환경" 각주 정도로만 서술할 것.
+15. ■ §6의 negative result는 이미 원인 분석까지 끝나 있다
+    (`01_plans/06_불일치표적배분_실측결과.md`) — "왜 실패했는가"를 다시
+    처음부터 추측하지 말고 그 문서의 4개 근거(§4-1~4-4)를 그대로 인용해
+    서술할 것.

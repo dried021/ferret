@@ -1,0 +1,56 @@
+이 문서는 OTTER 프로젝트 §4.1 headline grid(논문 Table 1 / Figure 1,
+otter/scripts/phase1_41_headline_gate.py)의 "남은 작업"만 아주 간단히 정리한
+것이다. 작성 기준 시각: 2026-07-30 00:56 KST (2026-07-29 15:56 UTC).
+
+===============================================================================
+현재 상태
+===============================================================================
+
+Table 1 그리드(6 calib 조건 x 5 eval 언어 x 3 seed = 30칸) 중 28칸 완료.
+남은 건 딱 2칸(각 3 seed = 6개 파일):
+  - english_only x ben_Beng (seed 0,1,2)
+  - korean_only  x ben_Beng (seed 0,1,2)
+
+원인: 두 조건 다 svd_scale_processed.pt(머지된 가중치)는 이미 있음. 다만
+그 eval_ppl.json이 ben_Beng 언어 추가 *이전*에 만들어진 구버전이라 5개 언어
+중 Bengali만 빠져 있음. 즉 재계산이 아니라 merge_eval 재실행만 필요.
+
+command (조건당 seed 0/1/2 각각):
+  conda run -n d2moe_env python phase1_merge_eval.py \
+    --condition english_only --seed <N> --scale-condition english_only --scale-seed <N>
+  (korean_only도 동일 패턴)
+
+출력 경로: RESULTS_ROOT/<condition>/seed<N>/scale_<condition>_seed<N>/eval_ppl.json
+
+===============================================================================
+지금 백그라운드에서 돌고 있는 것 (이 세션이 15:20 UTC에 띄움)
+===============================================================================
+
+위 6개를 순서대로(english_only 0,1,2 -> korean_only 0,1,2) 돌리는 셸 스크립트가
+GPU2,3(CUDA_VISIBLE_DEVICES=2,3)에서 실행 중.
+  - 로그: otter/logs/pending_merge_eval_driver.log (진행상황),
+    otter/logs/pending_merge_eval_<condition>_seed<N>.log (개별 stdout)
+  - english_only seed0/seed1은 처음에 GPU0,1로 시도했다가 그 순간 다른 세션의
+    belebele_eval 작업과 겹쳐 OOM으로 2번 실패 -> GPU2,3으로 바꿔 재시작함
+    (지금 재시도 중인 게 이 버전).
+  - GPU2,3은 이 세션 소관 아닌 "P2 backfill" 자동화도 같은
+    /tmp/phase1_merge_eval.lock을 씀 -- 결과 파일 경로는 안 겹치므로 안전,
+    다만 그 세션 큐와 번갈아 실행되느라 대기 시간이 생길 수 있음.
+  - 새 세션은 `nvidia-smi` / `cat otter/logs/pending_merge_eval_driver.log`로
+    진행 상황부터 확인할 것. 중간에 죽어 있으면 위 6개 중 아직 없는
+    seed부터 위 command로 이어서 돌리면 됨(멱등, 이미 있는 건 안 건드림
+    -- 단, merge_eval 자체는 매번 새로 씀, "존재하면 스킵" 로직 없음이니
+    이미 성공한 seed는 다시 돌리지 말 것).
+
+===============================================================================
+6개 다 끝나면 할 일
+===============================================================================
+
+  cd otter/scripts && python phase1_41_headline_gate.py
+
+이러면 Table 1 전체 30칸 + own_gain 검정(SUPPORTED/INCONCLUSIVE/...)이
+ben_Beng까지 포함해서 자동으로 나옴. 지금까지(4개 언어 기준) 결과:
+  - Korean, Swahili: SUPPORTED
+  - Chinese: SIGN_CONSISTENT_NO_FLOOR (placebo 없음, chinese_only_b 미실행)
+  - English: INCONCLUSIVE (own_gain이 noise floor의 2배를 못 넘음)
+  - Bengali: 위 6개 채워져야 판정 가능

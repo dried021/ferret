@@ -1,0 +1,34 @@
+{
+  "condition": "robust_mix",
+  "n_samples": 64,
+  "seqlen": 512,
+  "per_seed": {
+    "0": {
+      "mean_raw_tokens": 1685.125,
+      "mean_realized_tokens": 512.0,
+      "cap_hit_fraction": 1.0,
+      "mean_fertility_chars_per_token": 1.2554000911752188,
+      "n_samples": 64
+    },
+    "1": {
+      "mean_raw_tokens": 1704.078125,
+      "mean_realized_tokens": 512.0,
+      "cap_hit_fraction": 1.0,
+      "mean_fertility_chars_per_token": 1.2566094005726955,
+      "n_samples": 64
+    },
+    "2": {
+      "mean_raw_tokens": 1648.28125,
+      "mean_realized_tokens": 512.0,
+      "cap_hit_fraction": 1.0,
+      "mean_fertility_chars_per_token": 1.2825117934890782,
+      "n_samples": 64
+    }
+  },
+  "mean_over_seeds": {
+    "mean_raw_tokens": 1679.1614583333333,
+    "mean_realized_tokens": 512.0,
+    "cap_hit_fraction": 1.0,
+    "mean_fertility_chars_per_token": 1.264840428412331
+  }
+}

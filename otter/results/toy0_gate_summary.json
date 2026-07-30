@@ -1,0 +1,28 @@
+{
+  "gate_margin": 1.5,
+  "top_k_fraction": 0.25,
+  "per_layer": {
+    "8": {
+      "noise_floor_js": 0.21693666620177957,
+      "cross_language_mean_js": 0.29471488327558804,
+      "ratio": 1.3585296042185167,
+      "pass": false
+    },
+    "22": {
+      "noise_floor_js": 0.1928267838473056,
+      "cross_language_mean_js": 0.30019352332354,
+      "ratio": 1.5568040773902825,
+      "pass": true
+    },
+    "38": {
+      "noise_floor_js": 0.20029308140086027,
+      "cross_language_mean_js": 0.3555608120055667,
+      "ratio": 1.7752026656075977,
+      "pass": true
+    }
+  },
+  "n_layers_pass": 2,
+  "n_layers_total": 3,
+  "overall_pass": true,
+  "verdict": "PASS -- calibration language moves routing/importance statistics beyond same-language resampling noise; proceed to README.md Phase 0 (install official D^2-MoE repo, real Fisher, Phase 1 pilot)."
+}

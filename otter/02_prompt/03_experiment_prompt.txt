@@ -1,0 +1,189 @@
+[이어서 진행할 작업 — 2026-07-29 세션에서 중단, 새 세션은 이 프롬프트로 그대로 이어받을 것]
+
+## 배경 / 목표
+
+00_docs/04_전체요약.md "논문 주장의 현재 형태" 마지막 항목과 01_plans/claude_plan.md가
+"최우선 순위"로 지정한 미해결 항목: 지금까지의 own-language 효과(핵심 발견 6·7번,
+KO/Swahili)와 §4.3 whitening 결과는 전부 FLORES bits-per-byte(언어모델링 likelihood)
+로만 확인됐고, **pruning까지 포함한 전체 파이프라인(Fisher merge + truncation-aware/
+whitened SVD + semi-dynamical structured pruning) + 실제 downstream task**에서
+재확인된 적이 없다. 사용자가 이 재확인 실험을 구현해달라고 요청했고(2026-07-29),
+경량 downstream task로 Belebele(122개 언어, FLORES 문단 기반 4지선다 독해)를 선택.
+
+## 이번 세션에서 만든 것 (전부 완료, 그대로 재사용)
+
+새 스크립트 4개 (otter/scripts/, 기존 phase1_merge_eval.py/phase1_structured_prune.py의
+load_model()/merge_condition()/apply_structured_pruning()을 그대로 import해서 재사용
+— 압축 파이프라인 자체는 전혀 새로 만들지 않았음):
+
+- **phase1_belebele_eval.py** — baseline 또는 조건별 압축 모델을 만들고(phase1_merge_eval.py와
+  동일한 --condition/--seed/--scale-condition/--scale-seed/--delta-ratio/--pp-ratio/
+  --pp-condition 인자 그대로 지원) D2MoE/lm-evaluation-harness(EleutherAI lm-eval v0.4.3,
+  vendored)로 Belebele 5개 언어(eng_Latn/kor_Hang/zho_Hans/swh_Latn/ben_Beng — 기존
+  FLORES bpb EVAL_LANGS와 동일)의 zero/few-shot accuracy를 측정. `--num-fewshot`,
+  `--limit`(lm-eval 자체 subsample), `--batch-size` 옵션 있음. 결과는
+  `<RESULTS_ROOT>/<condition or baseline>/[scale_.../][pp_ratio_X/][fewshot_N/]eval_belebele.json`
+  에 저장(num_fewshot>0이면 경로에 `fewshot_N` 서브디렉토리 — 0-shot 결과와 안 겹치게
+  하려고 이번 세션에 고친 것, 처음엔 안 그래서 baseline 0-shot 결과가 5-shot 결과에
+  덮어써질 뻔했음, phase1_belebele_eval.py 주석 참고).
+- **phase1_belebele_floor_check.py** — baseline(비압축) 결과를 읽어 언어별 accuracy가
+  4지선다 chance(25%)와 통계적으로 구분되는지(binomial test) + 실질적 margin이 있는지
+  (MIN_MARGIN=5%p) 검사. `--num-fewshot` 인자로 어느 baseline 결과를 볼지 지정.
+  DeepSeek-MoE-16B-base가 base(비instruction-tuned) 모델이라 이 사전 점검이
+  필수라고 사용자가 지적함(중요 실측 결과는 아래 참고).
+- **phase1_belebele_gate.py** — baseline 대비 retention(=압축모델 acc/baseline acc)을
+  pp_ratio OFF/ON 각각 계산, macro-average/worst-language retention 산출(01_연구설계.md
+  §10 공식 그대로). floor_check에서 flagged된 언어는 macro/worst 계산에서 제외.
+- **run_phase1_belebele_grid.py** — 여러 condition×seed×pruning on/off를 순회하며
+  phase1_belebele_eval.py를 호출하는 오케스트레이터(run_phase1_pruning_ablation.py와
+  같은 패턴). 기본은 own-language whitened SVD(--scale-condition=조건 자기 자신) 사용.
+- **watch_theta.sh** — theta5090 노드에서 1초마다 시간+gpustat+현재 도는 phase1_*.py
+  프로세스+로그 tail을 보여주는 관찰용 스크립트(/root/watch_theta.sh에 이미 올려둠).
+
+**버그 2건 발견·수정함** (otter/D2MoE/lm-evaluation-harness/lm_eval/tasks/belebele/*.yaml,
+122개 파일 전부 로컬에 이미 반영됨, git 추적 안 되는 otter/ 트리라 커밋 없이 파일
+자체가 수정된 상태):
+1. 모든 belebele_<lang>.yaml에 `dataset_name` 필드가 없어서(그리고 `test_split`/
+   `fewshot_split`이 언어코드로 잘못 지정돼 있어서) `datasets.load_dataset()`이
+   실패했음 → `dataset_name: <lang>` 추가 + `test_split`/`fewshot_split`을 `"test"`로
+   통일(facebook/belebele는 언어별 config 안에 스플릿이 "test" 하나뿐).
+2. DeepSeek 모델링 코드(HF 최초 다운로드분)의 `if is_flash_attn_2_available(): from
+   flash_attn import ...`가 transformers의 check_imports 정적 스캔에 무조건 걸림 →
+   `try/except ImportError: pass`로 감싸서 우회(로컬 기존 hf_cache 캐시엔 이미 이
+   패턴으로 되어 있었음, theta5090 새 다운로드분만 직접 패치함).
+
+## 실측 결과 (중요 — 이후 판단 기준)
+
+**baseline(비압축) 0-shot, 전체 세트(n=900/언어):**
+EN 35.2%(+10.2%p), ZH 31.4%(+6.4%p), SW 29.6%(+4.6%p), KO 29.0%(+4.0%p),
+BEN 28.1%(+3.1%p, α=0.01에서 chance와 구분 안 됨). **0-shot은 전부 여유폭이
+너무 얇아서 폐기 — 5-shot으로 전환(사용자 결정).**
+
+**baseline 5-shot, pilot(n=200/언어) — 지금 쓰는 기준:**
+EN 52.5%(+27.5%p, OK), ZH 47.0%(+22.0%p, OK), KO 36.0%(+11.0%p, OK),
+**SW 28.5%(+3.5%p, 여전히 chance, FLOOR)**, **BEN 28.5%(+3.5%p, 여전히 chance, FLOOR)**.
+→ **Swahili/Bengali은 5-shot으로도 구제 안 됨.** Belebele accuracy로는 이 두 언어의
+압축 효과를 볼 수 없음(사용자에게 보고 완료). 대안(미착수): num-fewshot을 더 올리거나
+(10-shot 등), FLORES En→X chrF++ 같은 생성 기반 metric으로 대체.
+→ **korean_only부터 먼저 전체 파이프라인 검증하기로 결정(사용자 확정).** swahili_only는
+보류.
+
+결과 파일 위치(로컬과 theta5090 양쪽에 동일 경로로 존재 — RESULTS_ROOT=
+`/mnt/HDD/minjeong/d2moe_results/phase1`, 서로 다른 물리 디스크라 처음엔 로컬에 없어서
+`scp theta5090:.../eval_belebele*.json`으로 복사해왔음, 이미 로컬에도 있음):
+- `baseline/eval_belebele.json` — 0-shot 전체(n=900)
+- `baseline/fewshot_5/eval_belebele.json` — 5-shot pilot(n=200) ← **이게 지금 기준**
+- `belebele_floor_check_result.json`, `belebele_floor_check_result_fewshot5.json`
+
+## 지금 막힌 지점 (새 세션이 여기서 이어받을 것)
+
+**korean_only 전체 파이프라인 grid(Fisher+SVD+pruning on/off, seed 0/1/2, 5-shot,
+limit=200, batch_size=1)를 로컬 GPU0,1에서 돌리다 두 번 실패:**
+1. batch_size=4 → 5-shot 긴 컨텍스트로 CUDA OOM (GPU 메모리, eval 단계)
+2. batch_size=1로 낮춰 재시도 → **시스템 RAM 부족으로 커널이 프로세스 kill(exit 137)**,
+   merge 도중(layer 18/27)에 죽음. 원인: `phase1_merge_eval.py`의 `merge_condition()`이
+   `fisher_processed.pt`(28GB)와 `svd_scale_processed.pt`(35GB)를 **둘 다 통째로
+   `torch.load(map_location="cpu")`** 해서 CPU RAM에 동시에 올림(~63GB) — 이게 마침
+   **사용자의 다른 세션이 돌리고 있는 EACL 헤드라인 그리드 백필 작업**(GPU2,3에서
+   `english_only`/`korean_only`/`chinese_only`/`swahili_only`를 seed별로 merge+eval하는
+   중, 로그 `otter/scripts/logs/phase1_6_p2_backfill.log`)과 로컬 RAM(총 125GB)을
+   나눠 쓰다가 초과됨.
+
+**theta5090(RTX 5090 32GB, RAM 62GB)으로 옮기는 것도 확실한 해결책 아님** — fisher+
+svd_scale 동시 로드만으로 ~63GB인데 theta5090 RAM 총량이 62GB뿐이라 거기서도 빠듯함
+(오히려 로컬 125GB보다 총량이 작음, 경합이 없을 뿐). 게다가 기존 압축 자산(seed당
+~63GB, korean_only 3 seed면 ~190GB)을 옮기려면 로컬→theta 업로드 속도 실측 5MB/s
+기준 seed 1개에도 약 3.6시간 걸림 — 사용자에게 이미 보고했고, 사용자는 이 트레이드오프를
+인지한 상태.
+
+**사용자의 최종 결정(이번 세션 마지막 지시): 지금은 아무것도 더 시도하지 말고 대기,
+이 프롬프트만 작성해두고 새 세션에서 이어가기로 함.**
+
+## 새 세션이 할 일 (순서대로)
+
+1. **먼저 로컬 상태 확인**:
+   ```
+   free -h   # available이 넉넉한지 (이전 실패 시점엔 RAM 65GB 사용/52GB 여유였는데도 동시 부하로 죽었음 — 여유 있어도 백필 작업과 동시 실행은 피할 것)
+   ps aux | grep -E "phase1_merge_eval|phase1_fisher|phase1_svd_scale" | grep -v grep   # 사용자의 백필 작업이 아직 도는지
+   cat /home/minjeong/project/FERRET/otter/scripts/logs/phase1_6_p2_backfill.log | tail -20   # 백필 진행 상황
+   ```
+2. **백필 작업이 안 돌고 있거나(끝났거나 lull 구간) RAM 여유가 충분할 때만** 아래 실행
+   (seed0 하나만 먼저 — 사용자가 "seed0만 먼저 재시도"를 낮은 리스크 옵션으로 선호했음):
+   ```
+   cd /home/minjeong/project/FERRET/otter/scripts
+   conda run -n d2moe_env python -u run_phase1_belebele_grid.py \
+     --conditions korean_only --seeds 0 --pp-ratio 0.2 --num-fewshot 5 --limit 200 --batch-size 1
+   ```
+   **주의**: `conda run`이 stdout을 내부적으로 버퍼링해서 로그 파일에 몇 분간 아무것도
+   안 보일 수 있음(정상, 이번 세션에서 반복 확인함) — `ps aux`/`nvidia-smi`/`free -h`로
+   실제 진행을 확인할 것, 로그가 조용하다고 죽었다고 판단하지 말 것. 단, 이전처럼 실제로
+   `Killed`/`CalledProcessError`가 로그에 찍히면 진짜 실패임.
+3. seed0 OFF/ON 둘 다 성공하면 seed1, seed2 이어서:
+   ```
+   conda run -n d2moe_env python -u run_phase1_belebele_grid.py \
+     --conditions korean_only --seeds 1 2 --pp-ratio 0.2 --num-fewshot 5 --limit 200 --batch-size 1
+   ```
+   (이미 끝난 seed0은 파일 존재 여부로 자동 스킵됨)
+4. 전부 끝나면 리텐션 리포트:
+   ```
+   conda run -n d2moe_env python phase1_belebele_gate.py --condition korean_only --pp-ratio 0.2 \
+     --scale-condition korean_only --num-fewshot 5
+   ```
+   → macro/worst-language retention이 pruning ON에서도 OFF와 비슷하게 유지되는지
+   (worst-language retention > 0.9 정도면 "효과가 살아있다"는 방향) 확인.
+5. **korean_only가 성공적으로 끝나면**: swahili_only는 Belebele 자체가 chance라 못 씀
+   (위 "실측 결과" 참고) — 사용자와 상의해서 (a) num-fewshot을 더 올려 재확인하거나
+   (b) FLORES chrF++ 같은 별도 metric을 새로 구현하거나 (c) swahili_only는 이 downstream
+   검증에서 제외하고 korean_only 단일 결과로 논문 주장을 구성할지 결정할 것 — 이번
+   세션에서 미결정.
+6. theta5090(RTX 5090 노드, ssh alias `theta5090`, `~/.ssh/config`에 등록됨,
+   `/root/otter/`에 코드 동기화되어 있고 baseline 0-shot/5-shot 결과 이미 있음)은
+   사용자가 "종료해도 되냐"고 물었고 "안전하다"고 답한 상태 — 새 세션 시작 시점에
+   이미 꺼져 있을 수 있음. 꺼져 있으면 그냥 로컬 결과만으로 진행. 필요하면(예: 로컬
+   RAM 경합이 계속 심하면) 다시 켜서 이번에 만든 스크립트/패치를 그대로 재사용 가능
+   (코드는 이미 `/root/otter/`에 있고, HF 모델도 이미 `/mnt/HDD/minjeong/hf_cache`에
+   캐시되어 있음 — 재다운로드 불필요).
+
+## 참고: 이번 세션이 만들지 "않은" 것 (오해 방지)
+
+- FLORES chrF++ fallback (Swahili/Bengali용) — 논의만 하고 구현 안 함.
+- pruning 없이 Fisher+SVD만의 Belebele 결과 — 아직 하나도 안 나옴(korean_only OFF
+  단계에서 계속 실패 중).
+- 위 스크립트들은 전부 새로 작성한 코드이고 실제로 성공적으로 끝까지 실행된 적은
+  아직 없음(baseline eval만 성공, 압축 모델 eval은 매번 리소스 문제로 실패) — 코드
+  자체의 논리적 정합성은 검토됐지만 "실제로 한 번 끝까지 통과"하는 검증은 아직
+  안 됨. 새 세션은 이 grid의 첫 성공 실행을 최우선으로 볼 것.
+
+===============================================================================
+## [별도 트랙] Swahili 2x2 + 디스크 — 2026-07-29 세션 요약 (다른 작업, 위 Belebele와 무관)
+===============================================================================
+
+**§4.3 자체는 이미 완료**(EN×KO 2x2 + KO pruning ablation, WHITENING_DOMINANT
+확정). 아래는 §4.3 필수 범위가 아닌 보너스 확장 작업(Swahili 중심 2x2)의 잔여
+작업 요약.
+
+**남은 작업**:
+1. svd_scale: `swahili_only_b` seed2 1회만 남음 (나머지는 §4.1 grid가 부수적으로
+   다 채워줌 — EN/EN_b/swahili 전 seed, swahili_b seed0/1 완료).
+2. merge_eval 12회: EN(fisher)×swahili(scale) x3, swahili(fisher)×EN(scale) x3,
+   swahili(fisher)×{EN_b,swahili_b}(scale) placebo x6. (swahili×swahili 대각선
+   3개는 §4.1 diagonal grid가 이미 만들어놔서 스킵 가능.)
+3. 실행 스크립트: `run_phase1_2x2_lang.py --lang-cond swahili_only --lang-cond-b
+   swahili_only_b --lang-code swh_Latn` (resumable, 이미 된 건 자동 스킵).
+   게이트: `phase1_2x2_gate_lang.py` (동일 인자).
+4. **알려진 위험**: svd_scale이 정확히 layer24→25 지점에서 host RAM/swap 고갈로
+   3번 연속 죽었음 (디스크 문제 아님, 확인함). §4.1 grid 등 다른 세션 작업과
+   동시 실행 시 host RAM 경합으로 재발 가능성 높음 — **다른 로컬 작업이 없을 때
+   단독으로 돌릴 것.**
+5. 예상 소요: 자원 독점 가정 시 약 4.5시간 (svd_scale 1회 ~75-90분 + merge_eval
+   12회 ~15분×12).
+
+**디스크**: 현재 `/mnt/HDD` 92GB 여유(99% 사용, 빠듯함). 이미 지운 것: Qwen3
+HF 캐시(57GB), stray fisher_layers 5개(140GB), smoke 산출물(~18GB) — 전부 안전한
+중복 제거였음. **더 지울 안전한 후보 없음** — 유일한 후보는 `balanced`(구
+3언어 legacy 조건, 84GB, mixed_5lang으로 대체됐지만 여러 스크립트가 여전히
+참조 중)인데 실제 실험 결과라 사용자 확인 없이 삭제하지 않음. 92GB면 남은
+작업(순증가 ~30GB) 자체는 충분.
+
+**우선순위 판단**: §4.1 grid(52%, bengali_only 0/3로 가장 뒤처짐)가 진짜 병목.
+Swahili 2x2는 §4.1 끝난 뒤 여유 될 때 단독으로 돌리는 게 안전.

@@ -1,0 +1,40 @@
+# Phase 0.5 -- reproducibility check (README.md "Phase 0.5"), run after Toy0
+# (2026-07-23) passed its gate. Goal: confirm the same pattern reproduces
+# with more seeds and a larger, token-controlled sample -- NOT to broaden
+# scope. No new languages, no new analysis, no new model here.
+#
+# Sentence *count* is not controlled anymore -- tokenizer-based token budget
+# is, since sentence length/tokenization (not language per se) is the
+# biggest confound. Each condition draws from a seed-shuffled, disjoint
+# slice of its language's FLORES-200 pool so English-A/English-B/balanced's
+# EN share never overlap within one seed.
+
+source: israel/flores-parallel
+split: test
+column_prefix: "sentence_"
+
+languages:
+  eng_Latn: English
+  kor_Hang: Korean
+  zho_Hans: Chinese (Simplified)
+
+seeds: [0, 1, 2]
+layer_indices: [4, 8, 14, 22, 30, 38]
+
+# Same total token budget for every condition (balanced splits it 1/3 per
+# language) -- see 00_docs/01_연구설계.md §6 "Balanced multilingual" for why total
+# (not per-language) budget is what must match across conditions.
+total_token_budget: 5000
+
+# english_a / english_b: disjoint same-language samples -- the "placebo"
+# pair Toy0 called en_only/en_only_control, renamed so figures/tables show
+# the noise-floor role directly instead of requiring a footnote.
+conditions: [english_a, english_b, korean, chinese, balanced]
+
+# Pre-registered gate (fixed BEFORE running, per user instruction) --
+# see 02b_analyze_repro.py GATE_CRITERIA_* constants for the exact checks.
+gate:
+  ratio_ok_threshold: 1.3          # median ratio at layer 22 AND layer 38, pooled over seeds
+  layer38_pass_min_seeds: 2        # out of len(seeds)
+  bootstrap_ci_layer: 38
+  bootstrap_n_resamples: 2000

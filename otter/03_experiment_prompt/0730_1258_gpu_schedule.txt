@@ -1,0 +1,118 @@
+[GPU 사용 스케줄 -- 2026-07-30 12:58 KST(03:58 UTC) 기준]
+
+이 문서는 otter/03_experiment_prompt/의 다른 프롬프트들(main_results/track_ab/
+whitening_geometry/xnli_eval/status_update)이 남긴 "다음에 뭘 돌려야 하는가"를
+GPU2,3 / GPU0,1 두 쌍 기준으로 실행 순서 + 예상 소요시간으로 정리한 것이다.
+배경/설계/함정은 각 원본 프롬프트를 그대로 참고할 것 -- 이 파일은 "무엇을,
+어느 GPU에, 얼마나 걸리게" 돌릴지만 다룬다.
+
+주의: 이 시각 기준으로 otter/03_experiment_prompt/0730_1253_status_update_prompt.txt
+가 거의 동시에 다른 세션(또는 다른 창)에 의해 작성됨 -- 같은 프로젝트를 동시에
+누가 더 만지고 있을 가능성이 있으니, 실행 전에 nvidia-smi / ps로 실제 상태부터
+재확인할 것. GPU 하나에 두 세션이 동시에 뭘 올리면 CPU RAM 경합으로 OOM난 전례가
+오늘 밤 2건 있었음(otter/logs/overnight_retries.log 참고).
+
+===============================================================================
+0. 지금(12:58 KST) 실행 중인 것
+===============================================================================
+
+GPU0,1: overnight_gpu01_belebele_xnli.sh (otter/scripts/, PID는 pgrep -f로 확인)
+  STEP3 XNLI smoke의 마지막 조건 mixed_5lang 처리 중(03:38 UTC 시작).
+  끝나면 자동으로 STEP4(xnli_analyze) -> STEP5(4.3 Swahili grid, best-effort)
+  까지 알아서 진행함. 로그: otter/logs/overnight_gpu01_belebele_xnli.log
+
+GPU2,3: pilot_interference_minimax_seed0.sh (otter/scripts/, 이번 세션이 새로 작성)
+  Track B(interference_minimax) 조건의 seed0 파일럿 -- freq_and_scale ->
+  fisher -> merge_eval(plain) 순서, 실측 소요시간 확인용.
+  로그: otter/logs/pilot_interference_minimax_seed0.log
+
+===============================================================================
+1. 완료된 것 (재실행 불필요)
+===============================================================================
+
+- Main results §4.1 headline grid: Table 1 30/30칸 완료.
+  Korean/Swahili SUPPORTED, Chinese/Bengali SIGN_CONSISTENT_NO_FLOOR(placebo
+  없어서), English INCONCLUSIVE.
+- Track A(CPU 신호): gap/abs/random-control 전부 3 seed 다 budget_allocation.json
+  존재.
+- Track B interference_model seed0: 성공, a_{.,swh_Latn} 4/4 양수 확인.
+- Belebele korean_only 전체 파이프라인: OFF/ON 6개 seed 결과 + 게이트 완료.
+  macro retention OFF=0.703 ON=0.657, worst-language OFF=0.625 ON=0.603
+  (pruning 추가 시 유의미하게 하락).
+- XNLI: baseline만 실패(OOM), english/korean/chinese/swahili/bengali_only
+  5개 조건 완료.
+
+===============================================================================
+2. GPU0,1 예정 작업 (overnight_gpu01_belebele_xnli.sh가 이어서 자동 실행)
+===============================================================================
+
+  2-1. XNLI mixed_5lang 마무리                              ~10-15분 (거의 끝남)
+  2-2. phase1_xnli_analyze.py --seed 0 --smoke               ~1-2분 (자동)
+  2-3. [best-effort, 낮은 우선순위] 4.3 Swahili grid
+       run_phase1_2x2_lang.py --lang-cond swahili_only
+         --lang-cond-b swahili_only_b --lang-code swh_Latn
+       -> svd_scale(swahili_only_b seed2, 1회, 단독 실행 권장)  ~75-90분
+       -> merge_eval 12회(EN/Swahili 교차 + placebo)            ~15분 x 12 = ~3시간
+       합계                                                     ~4.5시간
+
+  * XNLI baseline은 재시도 안 됨(자동 큐 설계상 스킵) -- 필요하면 수동으로:
+    flock /tmp/phase1_merge_eval.lock env CUDA_VISIBLE_DEVICES=<여유쌍> \
+      conda run -n d2moe_env python -u phase1_xnli_eval.py --baseline --smoke
+    ~10-15분 (baseline은 merge 없이 원본 모델만 로드하므로 빠름)
+
+===============================================================================
+3. GPU2,3 예정 작업
+===============================================================================
+
+  3-1. [진행중] interference_minimax seed0 파일럿                ~1-2시간
+       (freq_and_scale + fisher + merge_eval, plain)
+       끝나면 otter/logs/pilot_interference_minimax_seed0.log에서
+       eval_ppl.json bpb 수치를 Balanced(worst=22.034, ben_Beng)와 비교해서
+       확장 여부 판단.
+
+  3-2. [파일럿 성공 시, 사용자 확인 후] Track B 확장
+       interference_minimax seed1, seed2                        ~1-2시간 x 2
+
+  3-3. [파일럿 성공 시, 사용자 확인 후] Track A 조건 3종 x 3 seed
+       vulnerability_targeted(gap) / _abs / _random 각 seed0,1,2  ~1-2시간 x 9
+       (총 9개 조합, 순차 실행 시 ~9-18시간 -- 규모가 크므로 조건별로
+       1개씩 먼저 시험하고 확장 여부를 다시 판단할 것)
+
+  3-4. [Track C, 별도 판단 필요] whitening-only 검증
+       vulnerability_targeted / interference_minimax 각각의
+       svd_scale_processed.pt가 있어야 함(3-2/3-3과 별개로 svd_scale 단계
+       추가 필요) -- 조건당 seed 3개 x ~75-90분 = ~4-4.5시간 x 2조건
+       = ~8-9시간. 가장 비용이 크고 3-2/3-3 결과부터 보고 결정할 것.
+
+  3-5. [GPU2,3이 완전히 비는 시점에, 다른 세션과 겹치지 않게 재확인 후]
+       Whitening geometry 본실행
+       cd otter/scripts && conda run -n d2moe_env python \
+         phase1_whitening_geometry.py --num-threads 6
+       -> phase1_whitening_geometry_analysis.py -> make_figure_whitening_geometry.py
+       ~1-2시간(추출) + 수 분(분석/그림)
+       * CPU 전용이라 GPU는 안 쓰지만, fisher/svd_scale 34GB 파일을 mmap으로
+         읽는 동안 다른 merge_eval-family 작업과 디스크/RAM을 나눠쓰면 오늘
+         밤처럼 8시간 대기 후 포기할 수 있음 -- 정말 GPU 큐가 완전히 빈 시점에
+         돌릴 것.
+
+  3-6. [사용자 판단 필요, 시작 안 함] Main results placebo 승격
+       chinese_only_b / bengali_only_b 조건을 새로 만들어 freq+fisher+
+       svd_scale+merge_eval 전체 파이프라인 실행 -> SIGN_CONSISTENT_NO_FLOOR를
+       SUPPORTED로 승격할 수 있는지 확인. 조건당(3 seed) ~4-5시간씩,
+       Chinese/Bengali 둘 다 하면 ~8-10시간.
+
+===============================================================================
+4. 종합 스케줄 제안 (자원 하나씩 순차 사용 가정)
+===============================================================================
+
+지금(GPU0,1: XNLI 마무리중, GPU2,3: interference_minimax 파일럿)
+  -> [+1~2h] 둘 다 1차 완료. XNLI 결과 검토 + 파일럿 결과 검토.
+  -> 파일럿 성공하면: GPU2,3에 Track B/A 확장 시작(§3-2/3-3), GPU0,1은
+     4.3 grid(§2-3) 계속.
+  -> 4.3 grid 끝나는 시점(+4.5h 근방)에 GPU0,1이 비면 whitening_geometry(§3-5)
+     그쪽으로 옮겨서 시작.
+  -> Track A/B 전체(9-18h) + Track C(8-9h)는 규모가 커서 하루 안에 다 못 끝남
+     -- 파일럿 결과를 보고 "이 중 어디까지 할지" 범위를 좁히는 게 우선.
+
+총 남은 작업을 다 하면 최소 15-20시간 규모 -- 오늘 안에 끝내려 하지 말고,
+파일럿(§3-1)과 4.3 grid(§2-3) 결과부터 보고 우선순위를 다시 좁힐 것을 권장.

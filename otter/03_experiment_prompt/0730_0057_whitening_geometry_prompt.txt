@@ -1,0 +1,316 @@
+이 문서는 OTTER 프로젝트(D²-MoE 다국어 calibration 연구) 중 "Whitening
+mechanism 직접 검증" 서브태스크 하나만 다룬다 (00_docs/09_부족한_실험_정리.md
+Priority S 항목 3 "Whitening mechanism 직접 검증" / reviewer comment "You claim
+whitening is the dominant source, but where is the evidence that whitening
+bases actually differ?"). 논문 전체 맥락은 otter/02_prompt/의 최신 프롬프트
+파일(예: 0729_1710_prompt.txt)을 따로 참고할 것 -- 이 파일은 그 문서를
+대체하지 않고, 이 서브태스크만 이어서 할 수 있도록 분리한 것이다. 이 파일
+전체를 새 Claude 대화에 붙여넣고 "이어서 해줘"라고 하면 된다.
+
+작성 기준 시각: 2026-07-30 00:57 KST (2026-07-29 15:57 UTC)
+작업 디렉토리: /home/minjeong/project/FERRET/otter/scripts/
+
+===============================================================================
+0. 한눈에 보는 현재 상태
+===============================================================================
+
+사용자가 준 원 요청: whitening mechanism을 "calibration language → whitening
+subspace/basis 변화 → 압축된 weight 변화 → 성능 차이"까지 연결하는 대규모
+실험 설계(RQ-W1~W4, principal angle/projection distance/whitening matrix
+distance/eigenvalue spectrum 4개 metric군, within-vs-between-language +
+permutation test, cross-whitening swap 등)를 그대로 구현.
+
+진행 상황:
+  [완료] otter/scripts/phase1_whitening_geometry.py 구현 (추출 + pairwise metric)
+  [완료] otter/scripts/phase1_whitening_geometry_analysis.py 구현 (within/
+         between + permutation test + heatmap/layer-curve 데이터)
+  [완료] otter/scripts/make_figure_whitening_geometry.py 구현 (Figure A/B)
+  [완료] 세 스크립트 모두 합성(fake) 데이터로 로직 검증 -- 아래 §3
+  [완료] 코드 리뷰 성격의 자체 검증에서 permutation test 버그 1건 발견·수정
+         (아래 §4)
+  [진행중] 실제 데이터(svd_scale_processed.pt, 6 conditions x 3 seeds)로
+         phase1_whitening_geometry.py 본실행 -- 로컬 GPU 머신의 다른 활성
+         작업(다른 세션이 실행 중인 belebele_eval/merge_eval 백필 큐)이
+         메모리를 거의 다 쓰고 있어서, 그 큐가 끝나면 자동으로 이어서
+         실행하는 대기 스크립트를 백그라운드로 걸어둔 상태 -- 아래 §5/§6
+  [미착수] phase1_whitening_geometry_analysis.py / make_figure_whitening_
+         geometry.py를 진짜 결과로 실행 (지금까지는 fake CSV로만 검증함)
+  [미착수] RQ-W3 (activation-conditioned reconstruction error, FLORES 성능과
+         상관 분석), RQ-W4/cross-whitening swap (causal evidence) -- 원
+         설계의 §9~11에 해당, 새 merge+eval 실행이 필요해서 이번 라운드에는
+         손대지 않음 (아래 §1 "구현 범위 결정" 참고)
+
+===============================================================================
+1. 실험 설계 요약 (사용자가 준 원 스펙 중 실제 구현에 반영된 결정만)
+===============================================================================
+
+배경: 09_부족한_실험_정리.md가 지적한 gap -- "whitening이 언어별로 다르다"는
+performance 차이로만 간접 주장되고, whitening subspace 자체가 다르다는 직접
+증거(principal angle, basis rotation, cosine similarity)가 없음.
+
+사용자가 준 원 스펙은 RQ-W1~W4, 4개 metric 그룹(principal angle/projection
+distance/whitening matrix distance/eigenvalue spectrum), 3개 분석 레벨
+(layer-pooled/expert-level/matrix-type별), causal ablation(cross-whitening
+swap, activation-conditioned reconstruction error) 등 매우 큰 설계였음 --
+전체 원문은 이 대화 세션 첫 메시지에 있던 17개 섹션짜리 한국어 스펙이고, 이
+프롬프트 파일엔 옮겨 적지 않음 (필요하면 사용자에게 재요청할 것).
+
+**구현 범위 결정 (이번 라운드에서 실제로 만든 것)**:
+  - 6 conditions (EN=english_only/ZH=chinese_only/KO=korean_only/
+    SW=swahili_only/BN=bengali_only/mixed_5lang=Balanced,
+    disagreement_common.conditions_for("mixed_5lang") 그대로) x 3 seeds.
+  - **새 GPU calibration 실행 없이**, phase1_svd_scale.py가 이미 만들어 둔
+    svd_scale_processed.pt(레이어당 expert별 Cholesky whitening factor L,
+    C=LLᵀ)를 그대로 재사용. 이유: L의 SVD(U_L, S_L)가 그대로 C의
+    eigendecomposition(eigvec=U_L, eigval=S_L²)이므로 torch.svd_lowrank로
+    top-k만 truncated 추출하면 dense d x d covariance를 한 번도 만들 필요가
+    없음.
+  - Metric 4종(k=16/32/64, k=64가 primary): mean/max principal angle,
+    projection distance, whitening relative Frobenius distance, covariance
+    relative Frobenius distance -- 뒤의 두 개는 dense d x d whitening/
+    covariance 행렬을 만들지 않고 k x k 연산(M=Ua^T Ub 및 eigenvalue만으로)
+    만으로 analytic하게 계산 (아래 §2의 whitening_distance()/
+    covariance_distance() docstring 참고).
+  - Dead/low-hit expert(phase1_svd_scale.py의 routing_coverage_flags.json,
+    kind="dead_fallback_identity"/"low_hit_flagged")는 자동 제외.
+  - 분석 레벨: 사용자 설계의 "Level 1 layer-pooled"는 재계산 비용이 커서
+    포기하고, 대신 "Level 2 expert-level"(설계 문서가 허용하는 대안 레벨)의
+    pair당 64 expert 평균값을 사용 -- 이 스코프 결정은 문서에 그대로
+    명시해둠 (phase1_whitening_geometry.py 모듈 docstring 참고).
+  - within-language(같은 조건, 다른 seed) vs between-language(다른 조건)
+    비교, ratio, permutation test(조건 레이블을 18개 (condition,seed) 노드
+    사이에서 셔플, 10,000회 기본), late-layer(마지막 25% MoE layer = layer
+    21~27) 서브셋 별도 집계.
+  - Figure A(layer-wise between vs within, percentile band) + Figure B
+    (6x6 language-pair heatmap, diagonal=within-language noise floor).
+  - **일부러 안 만든 것**: RQ-W3(activation-conditioned reconstruction
+    error로 own-language gain의 local mechanism 증명), RQ-W4/cross-whitening
+    swap(EN stats + KO whitening 식으로 실제 merge+eval 다시 돌려서 causal
+    evidence 만들기) -- 둘 다 새 GPU merge+eval 실행이 필요해서 리소스
+    상황(§5) 때문에 이번 라운드에는 스코프에서 뺐음. 사용자와 상의 후
+    다음 라운드에 진행할지 결정할 것.
+
+===============================================================================
+2. 구현한 파일
+===============================================================================
+
+**otter/scripts/phase1_whitening_geometry.py**
+  - CONDITIONS/SEEDS/MOE_LAYERS(1..27)/MATRIX_TYPES(gate_proj/up_proj/
+    down_proj)/K_LIST([16,32,64])/LOW_HIT_THRESHOLD(=5, 기존 프로젝트
+    전역 관례 재사용) 등 상수.
+  - extract_topk(): Cholesky factor L(bf16) -> torch.svd_lowrank(q=72,
+    niter=2)로 top-64 (eigvec, eigval) 추출.
+  - build_node_cache(): 한 (condition,seed,layer,matrix_type) 노드의 64
+    expert를 batched tensor로 스택 (dead/low-hit 제외).
+  - whitening_distance()/covariance_distance(): dense d x d 행렬을 한 번도
+    안 만들고 M=Ua^T Ub(k x k)와 top-k eigenvalue만으로 relative Frobenius
+    distance를 analytic하게 계산하는 trace-identity 유도 (함수 docstring에
+    수식 전개 있음).
+  - pairwise_metrics(): 위 모든 metric을 expert 차원에 대해 배치로 계산.
+  - align_common(): 두 노드가 공유하는(둘 다 dead/low-hit이 아닌) expert만
+    교집합으로 정렬.
+  - main(): 18개 (condition,seed) 노드의 svd_scale_processed.pt를
+    torch.load(..., mmap=True)로 "한 번씩만" 연다 (파일당 34GB, mmap 안
+    쓰면 전부 RAM에 올라감 -- §5 참고). (layer, matrix_type) 81개 조합을
+    순회하며 그때그때 transient in-RAM cache만 만들고 pairwise metric
+    계산 후 버림 -- 큰 중간 산출물을 디스크에 전혀 안 남김. 결과는
+    otter/results/whitening_geometry_pairs.csv에 (layer,matrix_type) 단위로
+    append, 이미 있는 (layer,matrix_type)는 스킵(resumable).
+  - CLI: `python phase1_whitening_geometry.py [--smoke] [--num-threads 6]`.
+    --smoke는 2 layers x 8 experts x gate_proj만(디스크 I/O 자체가 오래
+    걸려서 완주는 못 봤음 -- §3 참고, 대신 함수 단위 sanity check로 검증함).
+
+**otter/scripts/phase1_whitening_geometry_analysis.py**
+  - within_between_summary(): within/between mean/std/ratio.
+  - permutation_test(): 18개 노드의 조건 레이블을 shuffle(조건 "정체성"을
+    bijection으로 relabel하는 게 아니라, 레이블 배열 자체를 노드 사이에서
+    섞어야 함 -- §4 버그 참고), 10,000회 기본, 관측 ratio가 null 분포
+    상위 몇 %인지로 p-value.
+  - language_pair_heatmap(): 6x6 행렬, 대각선=within-language 평균.
+  - layer_curve(): layer별 within/between mean + [2.5,97.5] percentile.
+  - CLI: `python phase1_whitening_geometry_analysis.py [--pairs-csv PATH]
+    [--n-permutations 10000] [--seed 0] [--out-stem whitening_geometry_analysis]`
+  - 출력: otter/results/{out_stem}.json,
+    otter/results/{out_stem}_heatmap.npz,
+    otter/results/{out_stem}_layer_curve.json
+
+**otter/scripts/make_figure_whitening_geometry.py**
+  - plot_layer_curve() / plot_heatmap() -- make_figure_expert_language_
+    heatmap.py와 동일한 INK/MUTED/GRID 팔레트, caption 컨벤션.
+  - CLI: `python make_figure_whitening_geometry.py [--analysis-stem ...]
+    [--layer-subset all|late]`
+  - 출력: otter/figures/whitening_geometry_layer_curve.png,
+    otter/figures/whitening_geometry_heatmap_{all,late}.png
+
+**otter/scripts/wait_and_run_whitening_geometry.sh** (§5/§6 참고)
+  - 로컬 GPU 머신의 다른 활성 작업(merge_eval/belebele_eval/백필 큐)이
+    끝나고 여유 메모리(>15GB)가 회복될 때까지 60초 간격으로 폴링, 최대
+    8시간(480회) 기다리다 안 끝나면 포기하고 exit 1. 끝나면 자동으로
+    phase1_whitening_geometry.py --num-threads 6 ->
+    phase1_whitening_geometry_analysis.py -> make_figure_whitening_geometry.py
+    순서로 실행.
+
+===============================================================================
+3. 검증한 것 (실행 순서대로)
+===============================================================================
+
+1) **--smoke 완주는 못 봄**: 로컬 GPU 머신의 디스크(HDD)가 다른 활성 작업과
+   경합 중이라 첫 svd_scale_processed.pt(34GB) mmap open조차 몇 분씩
+   걸렸고(§5), 메모리 압박(swap 100%)도 관측돼서 --smoke 실행 두 번 다
+   중간에 직접 kill함 (§5). 대신:
+
+2) **순수 in-memory synthetic sanity check**로 핵심 함수(extract_topk,
+   pairwise_metrics, align_common)를 실제 파일 없이 검증:
+   - 동일한 Cholesky factor 두 개 비교 -> angle/whitening_reldist/
+     cov_reldist 전부 ~0 (수치 오차 수준, torch.svd_lowrank 근사라 정확히
+     0은 아님, 확인함)
+   - 독립적인 랜덤 Cholesky factor 두 개 비교 -> mean angle 63~74도,
+     max angle 87~90도(이론적 상한), reldist ~1.2~1.3 (기대한 대로 "완전히
+     다름"에 가까운 값)
+   - align_common()이 disjoint expert id set의 교집합을 올바르게 찾음
+
+3) **phase1_whitening_geometry_analysis.py**를 CSV 스키마와 동일한 fake
+   데이터 두 세트로 검증:
+   - "진짜 신호 있음" 세트(within~5도, between~30도로 fabricate) -> ratio
+     ~5.9~6.1, permutation p=0.0000 (신호가 뚜렷하면 유의하게 나옴 확인)
+   - "진짜 null" 세트(within/between 구분 없이 동일 분포) -> ratio~1.0,
+     p=0.45~0.69 (신호 없으면 유의하지 않게 나옴 확인 -- 이게 없으면 테스트
+     자체가 항상 유의하게만 나오는 건 아닌지 의심스러웠을 것)
+
+4) **make_figure_whitening_geometry.py**를 위 "진짜 신호 있음" fake 데이터의
+   analysis 결과로 실제 렌더링, 그림 두 장 다 육안 확인(Figure A: between
+   라인이 within 밴드 위에 뚜렷이 분리, Figure B: 대각선(bold, ~5)과
+   비대각선(~30) 명확히 구분) -- 확인 후 fake 데이터로 만든 그림 파일은
+   삭제함 (진짜 결과 아닌 게 figures/에 남아있으면 안 되니까).
+
+===============================================================================
+4. 자체 검증에서 찾아 고친 버그 1건
+===============================================================================
+
+**permutation_test()의 조건 레이블 셔플 로직 오류**
+(phase1_whitening_geometry_analysis.py): 최초 구현은
+`rng.permutation(len(nodes))[orig_cond_of_node]`로 "6개 조건 정체성을
+bijection으로 relabel"했는데, 이건 어떤 조건이 0번 레이블을 받든 3번
+레이블을 받든 **그룹 소속 자체(어느 3개 노드가 같은 그룹인가)는 절대
+안 바뀌는** 방식이라서, permutation을 몇 번을 돌려도 within/between 분할이
+매번 원본과 100% 동일하게 나옴 -- 그 결과 관측된 ratio가 아무리 커도
+p-value가 항상 1.0000으로 나오는 버그였음. fake 데이터로 실제 돌려보다가
+발견(관측 ratio=5.9인데 p=1.0000이 나와서 이상하다고 판단, 로직 재검토).
+
+수정: `rng.permutation(orig_cond_of_node)`로 **레이블 배열 자체**를 18개
+노드 사이에서 섞도록 변경(그룹 크기는 유지되지만 원래 3인조 묶음은
+깨짐) -- 이게 사용자 설계 §12의 "null: language label을 seed-level
+whitening object 사이에서 섞음"이 의도한 바와 일치. 수정 후 재검증(§3의
+2)/3))으로 신호 있음/null 케이스 둘 다 기대한 방향으로 나오는 것 확인.
+
+===============================================================================
+5. 실행 환경 / 리소스 이슈 (중요, 재개 전 반드시 재확인)
+===============================================================================
+
+**디스크 공간 (2026-07-29 15:xx UTC 기준, 재확인 필요)**:
+  - /mnt/HDD: 7.3T 중 83GB 여유 (99% 사용) -- 다른 사용자와 공유.
+  - / (홈 파티션 포함): 1.9T 중 51GB 여유 (98% 사용) -- 마찬가지로 공유.
+  - 이 때문에 phase1_whitening_geometry.py는 **새 중간 산출물을 디스크에
+    거의 안 남기도록** 설계함 (최종 CSV만, 수십 MB 수준). eigenvector
+    캐시 같은 걸 따로 저장하는 방식은 처음에 고려했다가(condition당
+    수십 GB 규모라) 이 디스크 상황 때문에 포기하고 스트리밍 방식으로
+    바꿈.
+
+**메모리/GPU 경합 (이 세션에서 실측)**:
+  - svd_scale_processed.pt는 condition x seed당 ~34GB (34GB x 18 = 전체
+    ~600GB 규모의 원본 데이터, 디스크엔 이미 있음). torch.load(...,
+    mmap=True)로 열면 실제로는 한 tensor당 필요할 때만 페이지가 로드됨
+    (실측: 파일 하나 열고 tensor 하나 materialize해도 RSS ~370MB 수준) --
+    이 mmap 트릭이 없으면 파일 하나만 열어도 34GB RAM을 먹으므로 절대
+    plain torch.load(map_location="cpu")로 열면 안 됨.
+  - 이 세션 진행 중 로컬 4x3090 머신에서 (이 세션이 시작한 게 아닌) 다른
+    활성 작업들이 관측됨: phase1_belebele_eval.py(korean_only, 한때 RAM
+    66.8GB/50.7%), phase1_merge_eval.py(korean_only/english_only, RAM
+    ~31~66GB), 그리고 GPU2,3에서 도는 백필 큐(otter/scripts/logs/
+    phase1_6_p2_backfill.log -- korean_only/chinese_only/swahili_only
+    (seed 0~2) + english_only seed0 merge_eval을 flock
+    /tmp/phase1_merge_eval.lock으로 순차 실행). 한때 시스템 전체 available
+    메모리가 <1GB, swap 100%까지 간 것도 관측함.
+  - 이 상황에서 phase1_whitening_geometry.py --smoke를 두 번 시도했다가
+    (1) 디스크 경합으로 mmap open 자체가 몇 분씩 걸려 완주를 못 봤고,
+    (2) 시스템 메모리 압박이 우려돼 둘 다 직접 kill함. **이건 스크립트
+    버그가 아니라 순전히 리소스 경합 때문** -- §3의 synthetic sanity
+    check로 로직 자체는 검증 완료.
+  - 사용자에게 "지금 실행/큐 끝날 때까지 대기/스크립트만 두고 나중에"
+    세 선택지를 물어봤고, **"큐 끝날 때까지 대기"**를 선택함.
+
+===============================================================================
+6. 현재 상태 & 다음 액션
+===============================================================================
+
+**이 세션이 걸어둔 백그라운드 작업** (2026-07-29 15:54:24 UTC 시작):
+  - otter/scripts/wait_and_run_whitening_geometry.sh 실행 중
+    (§2 참고, /tmp에도 사본이 있었으나 그건 참고용, 진짜 실행 근거는
+    otter/scripts/ 밑의 이 파일).
+  - 로그: otter/scripts/logs/whitening_geometry_wait_and_run.log
+  - 마지막 확인 시점(15:57 UTC) PID: 부모 1428712 / 실제 스크립트 1428734
+    (**이 PID는 곧 무의미해짐 -- 새 세션에서는 반드시 재확인**)
+  - **★★★ 중요 캐비앗 ★★★**: 이 백그라운드 작업은 harness의 background
+    task로 띄웠고(nohup/disown 안 함, notification을 받기 위해 일부러 그렇게
+    함) -- 즉 **이 Claude Code 세션(터미널/CLI 프로세스)이 끊기면 이
+    대기 스크립트도 같이 죽을 수 있음**. 새 세션에서 이어받을 때 반드시
+    아래 1번부터 재확인할 것 (살아있다는 보장이 전혀 없음).
+
+**다음 세션 시작하면 할 일 (우선순위 순)**:
+  1. 대기 스크립트가 아직 살아있는지 확인:
+     `pgrep -fa wait_and_run_whitening_geometry.sh`
+     `tail -20 otter/scripts/logs/whitening_geometry_wait_and_run.log`
+  2. 결과 CSV가 이미 나왔는지 확인:
+     `ls -la otter/results/whitening_geometry_pairs.csv` (완주 시 81개
+     (layer,matrix_type) 조합 x pair 수만큼의 row, header 포함).
+     또는 부분적으로 나와있으면(resumable 설계이므로) 그대로 재실행하면
+     이어서 진행됨: `conda run -n d2moe_env python
+     otter/scripts/phase1_whitening_geometry.py`
+  3-A. **대기 스크립트가 죽었고 CSV도 없다면**: 먼저 `nvidia-smi`,
+     `free -h`, `ps aux | grep -E "phase1_merge_eval|phase1_belebele_eval"`
+     로 로컬 GPU 머신 상황 재확인. 여유 있으면
+     `conda run -n d2moe_env python otter/scripts/phase1_whitening_geometry.py
+     --num-threads 6` 직접 실행(백그라운드 권장, CPU 전용이라 GPU는 안
+     건드림, ~1~2시간 예상). 아직 다른 작업이 바쁘면 otter/scripts/
+     wait_and_run_whitening_geometry.sh를 다시 백그라운드로 띄울 것.
+  3-B. **CSV가 이미 완성돼 있다면**: 바로
+     `conda run -n d2moe_env python otter/scripts/phase1_whitening_geometry_analysis.py`
+     -> `conda run -n d2moe_env python otter/scripts/make_figure_whitening_geometry.py`
+     실행 (둘 다 몇 분 이내로 끝남, GPU/큰 메모리 불필요).
+  4. 결과 확인: otter/results/whitening_geometry_analysis.json(ratio,
+     permutation p-value, all-layer vs late-layer), otter/figures/
+     whitening_geometry_layer_curve.png, whitening_geometry_heatmap_{all,
+     late}.png.
+  5. 결과를 사용자에게 보고하고, RQ-W3(activation-conditioned reconstruction
+     error)/RQ-W4(EN-KO cross-whitening swap, 새 merge+eval 필요)를 다음
+     라운드로 진행할지 상의할 것 -- §1 "구현 범위 결정" 참고, 이번엔
+     일부러 안 만들었음.
+
+===============================================================================
+7. 참고: 파일 위치 요약
+===============================================================================
+
+  - 스크립트: otter/scripts/phase1_whitening_geometry.py,
+    otter/scripts/phase1_whitening_geometry_analysis.py,
+    otter/scripts/make_figure_whitening_geometry.py,
+    otter/scripts/wait_and_run_whitening_geometry.sh
+  - 로그: otter/scripts/logs/whitening_geometry_wait_and_run.log
+  - 결과(완성되면): otter/results/whitening_geometry_pairs.csv,
+    otter/results/whitening_geometry_analysis.json,
+    otter/results/whitening_geometry_analysis_heatmap.npz,
+    otter/results/whitening_geometry_analysis_layer_curve.json
+  - 그림(완성되면): otter/figures/whitening_geometry_layer_curve.png,
+    otter/figures/whitening_geometry_heatmap_all.png,
+    otter/figures/whitening_geometry_heatmap_late.png
+  - 입력 원본(수정 안 함, 읽기 전용): /mnt/HDD/minjeong/d2moe_results/
+    phase1/{condition}/seed{N}/svd_scale_processed.pt,
+    /mnt/HDD/minjeong/d2moe_results/phase1/{condition}/seed{N}/
+    routing_coverage_flags.json
+  - 재사용한 기존 코드: otter/scripts/phase1_svd_scale.py(whitening
+    Cholesky factor를 만드는 원본 스크립트, 이번 작업은 이 출력을 읽기만
+    함), otter/scripts/disagreement_common.py(conditions_for), otter/
+    scripts/phase1_fisher.py(MOE_LAYERS), otter/scripts/
+    make_figure_expert_language_heatmap.py(figure 스타일 템플릿)
+  - 원 설계 스펙(전체 17개 섹션, 이 파일엔 요약만 옮김): 이 대화 세션의
+    첫 사용자 메시지 -- 필요하면 사용자에게 재요청.
+  - 관련 문서: otter/00_docs/09_부족한_실험_정리.md (Priority S 항목 3)

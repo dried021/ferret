@@ -1,0 +1,156 @@
+이 문서는 otter/03_experiment_prompt/의 4개 서브태스크 프롬프트
+(0730_0026_xnli_eval_prompt.txt, 0730_0056_main_results_prompt.txt,
+0730_0057_track_ab_prompt.txt, 0730_0057_whitening_geometry_prompt.txt,
+전부 2026-07-30 00:26~00:57 KST 작성)의 "현재 상태" 섹션을 지금 시점으로
+업데이트한 것이다. 배경/설계/함정 등 상세 내용은 각 파일이 그대로 최신이니
+지우지 말고 계속 참고할 것 -- 이 파일은 "그 사이 무엇이 끝났고 무엇이
+남았는가"만 다룬다. 이 파일 전체를 새 Claude 대화에 붙여넣고 "이어서 해줘"
+라고 하면 된다.
+
+작성 기준 시각: 2026-07-30 12:53 KST (2026-07-30 03:53 UTC)
+작업 디렉토리: /home/minjeong/project/FERRET/otter/scripts/
+
+===============================================================================
+0. 지금 뭐가 돌고 있나 (가장 먼저 확인할 것)
+===============================================================================
+
+GPU0,1: overnight_gpu01_belebele_xnli.sh(otter/scripts/overnight_gpu01_belebele_xnli.sh)
+가 여전히 실행 중 -- STEP 3(XNLI smoke)의 마지막 조건 mixed_5lang 평가 중
+(03:38 UTC 시작, 다른 조건들이 25~27분씩 걸렸으니 04:05 UTC 전후 완료 예상).
+  tail -30 /home/minjeong/project/FERRET/otter/logs/overnight_gpu01_belebele_xnli.log
+  tail -30 /home/minjeong/project/FERRET/otter/logs/overnight_xnli_mixed_5lang.log
+mixed_5lang 끝나면 스크립트가 자동으로 STEP 4(xnli_analyze) -> STEP 5(swahili
+2x2 확장, best-effort)까지 알아서 진행함. 세션이 끊겼으면 nvidia-smi로 GPU0,1
+(PID 확인)이 살아있는지부터 볼 것 -- 살아있으면 그냥 기다리면 됨.
+
+GPU2,3: 지금 유휴 (03:53 UTC 확인, 0MiB/9MiB 사용). §3(whitening_geometry)
+본실행을 지금 바로 시작할 수 있는 상태.
+
+===============================================================================
+1. Track별 델타 (지난 프롬프트 대비 무엇이 끝났나)
+===============================================================================
+
+--- Track 1: §4.1 headline grid (0730_0056_main_results_prompt.txt) ---
+**완료.** 그 프롬프트가 남겼다고 한 english_only/korean_only x ben_Beng
+6개 seed 파일이 이 사이 (다른 세션의 pending_merge_eval 드라이버가) 전부
+채워짐. 방금 이 세션에서 재검증차 재실행함:
+  cd otter/scripts && conda run -n d2moe_env python phase1_41_headline_gate.py
+결과 (own-language gain, ben_Beng 포함 최종):
+  eng_Latn: mean own_gain=+5.96, noise_floor=4.05 -> INCONCLUSIVE (여전히 미달)
+  kor_Hang: mean=+60.78, noise_floor=0.79 -> SUPPORTED
+  zho_Hans: mean=+10.76, NO_PLACEBO -> SIGN_CONSISTENT_NO_FLOOR
+  swh_Latn: mean=+35.55, noise_floor=0.91 -> SUPPORTED
+  ben_Beng: mean=+67.85(!), NO_PLACEBO -> SIGN_CONSISTENT_NO_FLOOR (신규)
+Table 1 30칸 전부 채워짐 -- 이 트랙은 **추가 GPU 작업 불필요**. 남는 선택지는
+Chinese/Bengali용 placebo 조건(chinese_only_b/bengali_only_b)을 새로 돌려서
+SIGN_CONSISTENT_NO_FLOOR를 SUPPORTED로 승격할지 여부뿐 (사용자 판단 필요,
+이 세션은 시작 안 함).
+
+--- Track 2: Track A/B/C negative-result 재시도 (0730_0057_track_ab_prompt.txt) ---
+그 프롬프트가 "지금 돌고 있다"고 한 P2 백필(english/korean/chinese/swahili_only
+x 3seed에 ben_Beng 채우기, 총 12개)은 **12/12 전부 완료** 확인함(각 조건
+eval_ppl.json에 ben_Beng 키 존재 확인). 이게 풀리면서 그 프롬프트의 §3
+"다음 순서" 1~2번까지 이미 진행됨:
+  - Track A(vulnerability_budget): --signal gap/abs/random-control **전부
+    3 seed 다 budget_allocation.json 존재** (vulnerability_targeted,
+    _abs, _random 전부 seed0/1/2). 그 프롬프트가 "seed1/2, abs, random-control
+    변형 아직 안 돌림"이라던 것 -- 이미 다 돌아감.
+  - Track B(interference_model): seed0 budget_allocation.json 존재(성공,
+    그 프롬프트가 "ben_Beng KeyError로 실패"라던 것 -- 백필 이후 재시도돼
+    성공한 것으로 보임). **seed1/2는 아직 안 돎.**
+  - phase1_6_budget_gate_v2.py도 이미 한 번 실행됨(01:27 UTC,
+    phase1_6_budget_gate_v2_result.json 존재) -- 단, 이건 "누가 이겼는지"가
+    아니라 balanced/single-condition 기존 PPL 결과만 채워져 있고, Track
+    A/B/C 각 candidate는 전부 `"ready": false`임 (§3 "다음 순서" 3~4번,
+    실제 GPU 파이프라인 실행이 아직 하나도 안 됐기 때문 -- CPU 신호/배분
+    계산만 끝난 상태).
+**다음 순서는 그 프롬프트의 §3 그대로 4번부터**: Track A/B가 고른 조건
+(vulnerability_targeted 계열, interference_minimax)을 실제
+phase1_run_freq_and_scale.py -> phase1_fisher.py -> phase1_merge_eval.py로
+조건당 3 seed 돌리고, 그 다음 phase1_6_budget_gate_v2.py 재실행. interference_minimax
+는 seed1/2의 budget_allocation.json도 먼저 채워야 함(Track B seed1/2 미실행).
+
+--- Track 3: Whitening geometry (0730_0057_whitening_geometry_prompt.txt) ---
+그 프롬프트가 "대기 스크립트를 background로 걸어뒀다"던 것
+(whitening_geometry_wait_and_run.log) -- **포기하고 끝남**:
+  00:22:30 KST "gave up after 480 checks (queue still running or memory
+  still tight: n_running=6 avail_mb=91107) -- NOT running the extraction
+  automatically. Re-run this script or phase1_whitening_geometry.py manually."
+즉 실제 데이터로 본실행은 **아직 한 번도 안 됨** (여전히 fake 데이터 검증만
+된 상태, 그 프롬프트의 진행 상황 표 그대로 유효). 지금(§0) GPU2,3이 비어
+있으니 **지금 바로 수동 재개 가능**:
+  cd otter/scripts
+  conda run -n d2moe_env python phase1_whitening_geometry.py <원래 프롬프트
+  §5/§6에 적힌 정확한 인자 그대로 -- svd_scale_processed.pt 6 conditions x
+  3 seeds 대상>
+GPU0,1은 아직 overnight 큐(§0)가 쓰고 있으니 GPU2,3 쪽에 CUDA_VISIBLE_DEVICES
+지정할 것. 새 세션은 실행 전에 nvidia-smi로 그 사이 다시 안 찼는지 재확인.
+
+--- Track 4: XNLI downstream eval (0730_0026_xnli_eval_prompt.txt) ---
+그 프롬프트가 "압축 조건 --smoke 실행 미완료"라고 남긴 것 -- overnight
+큐(§0, otter/scripts/overnight_gpu01_belebele_xnli.sh STEP 3)가 밤새 이걸
+처리함:
+  - baseline: **FAILED** (rc=1, CUDA OOM -- 모델 로드 중 "Tried to allocate
+    20.00 MiB" 수준의 근소한 부족, log: overnight_xnli_baseline.log). 큐
+    설계상 실패해도 다음으로 넘어가게 돼 있어 재시도 안 되고 그냥 스킵됨.
+    **baseline만 다시 돌려야 함** (원인: 압축 조건들과 달리 baseline은
+    31GB 풀모델이라 다른 조건보다 메모리 여유가 더 적음 -- safe_gpus.sh가
+    고른 GPU 쌍에 그 순간 다른 프로세스가 물려 있었을 가능성).
+  - english_only/korean_only/chinese_only/swahili_only/bengali_only:
+    **전부 DONE** (각 eval_xnli_smoke.json 존재할 것, 05:26 KST~ 순차 완료).
+  - mixed_5lang: 진행 중 (§0).
+  - phase1_xnli_analyze.py 본실행: 아직 (mixed_5lang 끝나야 자동 실행됨,
+    그 프롬프트가 "가짜 JSON으로만 검증했다"던 것 -- 이번에 처음으로 진짜
+    결과로 돌아감, 자동 실행 결과를 검토할 것).
+**baseline 재실행 커맨드** (다른 GPU가 비었을 때, mixed_5lang/GPU2,3
+어느 쪽이든 여유 있는 쪽으로):
+  cd otter/scripts
+  flock /tmp/phase1_merge_eval.lock env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    CUDA_VISIBLE_DEVICES=<여유GPU쌍> conda run -n d2moe_env python -u phase1_xnli_eval.py \
+    --baseline --smoke
+
+===============================================================================
+2. 이번 확인 과정에서 새로 발견한 것 (버그성, 다음 세션 참고)
+===============================================================================
+
+- **phase1_belebele_gate.py가 밤중(01:08 UTC)엔 korean_only 3 seed 전부
+  "ON not found"로 스킵했는데, 방금(03:5x UTC) 아무 코드 변경 없이 그대로
+  재실행하니 정상적으로 OFF/ON 둘 다 찾아서 계산됨.** 원인 불명(파일시스템
+  flush 지연 등 일시적 문제로 추정, RUN_STATE.md에 기록된 "MFS 쓰기 불안정"
+  패턴과 비슷할 수 있음) -- 코드 버그는 아닌 것으로 보이나 확실친 않음.
+  **실제 결과(지금 재실행분, 신뢰 가능)**:
+    korean_only 전체 파이프라인(Fisher+whitened SVD, pp_ratio=0.2, 5-shot):
+    macro-average retention OFF=0.703 ON=0.657
+    worst-language retention OFF=0.625 ON=0.603 (worst=English, Korean 자신은
+    OFF 0.819/ON 0.708로 오히려 덜 나쁨)
+    swh_Latn/ben_Beng은 floor_check에서 chance 근방으로 flagged돼 위 계산
+    에서 제외됨(그 프롬프트가 이미 알고 있던 사실, §"실측 결과" 참고).
+  결과 파일: /mnt/HDD/minjeong/d2moe_results/phase1/phase1_belebele_gate_korean_only_result.json
+  **해석**: pruning(ON)까지 포함한 전체 파이프라인에서 worst-language
+  retention이 0.6 근처로 상당히 낮음 -- 0730_0026_xnli_eval_prompt.txt의
+  "본실행 전 검증 필요" 우려와 같은 방향, 논문에 이 grid 결과를 어떻게
+  프레이밍할지 사용자 판단 필요.
+
+===============================================================================
+3. 우선순위 제안 (다음 세션이 고를 것, 확정된 지시 아님)
+===============================================================================
+
+1. GPU0,1 overnight 큐가 끝나는지 지켜보고(§0), 끝나면 STEP4 xnli_analyze
+   결과 검토 + baseline만 재실행(§1 Track4).
+2. GPU2,3이 비어 있는 지금, whitening_geometry 본실행 시작(§1 Track3) --
+   이게 이번 세션들 중 유일하게 "실행 조건은 갖춰졌는데 그냥 안 돌아간" 트랙.
+3. Track A/B가 고른 조건의 실제 GPU 파이프라인 실행(§1 Track2 "다음 순서")
+   -- 다른 두 GPU 페어가 자리날 때 시작.
+4. (낮은 우선순위, 사용자 판단 필요) Chinese/Bengali placebo 조건 실행 여부(§1 Track1).
+
+===============================================================================
+4. 참고
+===============================================================================
+
+- 전체 배경/사용자 지시/마감(EACL 2026-08-04)은 otter/02_prompt/의 최신
+  프롬프트(0729_1710_prompt.txt, 또는 이후 새로 생겼으면 그걸로) 참고.
+- 인프라 함정(디스크 쿼터, 조용한 프로세스 사망, ls 정렬 등)은
+  otter/RUN_STATE.md에 계속 누적되고 있음 -- 이 파일은 그 문서를 대체하지
+  않음, GPU 인프라 이슈 새로 겪으면 거기에도 기록할 것.
+- 각 트랙 상세 배경/설계/함정은 지우지 말고 그대로 둔 4개 원본 프롬프트
+  파일 참고(§0에 파일명 나열).
