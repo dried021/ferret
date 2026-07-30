@@ -9,6 +9,7 @@ hf_cache/
 
 # logs
 *.log
+tools/logs/
 
 # python
 __pycache__/
